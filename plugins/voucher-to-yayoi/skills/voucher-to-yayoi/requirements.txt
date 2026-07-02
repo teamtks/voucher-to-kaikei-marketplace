@@ -1,0 +1,14 @@
+# PaddleOCR/PaddlePaddleは、より新しい3.x系(PaddleX統合版)がCPU/oneDNN環境で
+# "NotImplementedError: ConvertPirAttribute2RuntimeAttribute" という既知の非互換で
+# 動作しない端末があったため、枯れた2.x系に固定している。
+# numpy/scipy/scikit-imageも、その2.x系と組み合わせて動作確認済みのバージョンに固定。
+# (このバージョン指定は、実際に動作確認済みの組み合わせなので変更しないこと)
+setuptools
+paddleocr==2.7.3
+paddlepaddle==2.6.2
+numpy<2
+scipy==1.11.4
+scikit-image==0.22.0
+pymupdf
+openpyxl
+pandas
