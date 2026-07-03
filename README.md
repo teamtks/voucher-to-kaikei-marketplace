@@ -5,14 +5,14 @@
 
 ## 導入方法(各自のPCで1回だけ)
 
-Claude Codeのチャット画面で、以下を順番に実行してください。
-`<組織名>/voucher-to-yayoi-marketplace` の部分は、実際のGitHubの組織名・
-リポジトリ名に置き換えてください。
+Claude Desktopアプリのチャット画面で `/plugin` と入力してもコマンドとして
+認識されないため、**設定画面から操作**してください。
 
-```
-/plugin marketplace add <組織名>/voucher-to-yayoi-marketplace
-/plugin install voucher-to-yayoi@voucher-to-yayoi-marketplace
-```
+1. 左下(または歯車アイコン)から「設定」を開く
+2. 左メニューの「Claude Code」→ さらにその中の「プラグイン」をクリック
+3. 右上の「追加」→「マーケットプレイスを追加」
+4. URL欄に `teamtks/voucher-to-kaikei-marketplace` と入力して「同期」
+5. 一覧に表示された「証憑→弥生インポートデータ作成」の「+」ボタンをクリックしてインストール
 
 これで、以降どのプロジェクトフォルダで作業していても、このスキルが自動的に
 使えるようになります。
@@ -22,20 +22,3 @@ Claude Codeのチャット画面で、以下を順番に実行してください
 このスキルは証憑画像の宛名を自動で黒塗りする処理のためにOCR(文字認識)の
 プログラムを使います。導入後、以下を1回だけ実行してください
 (このときだけインターネット接続が必要です)。
-
-```
-cd <スキルのインストール先フォルダ>\scripts
-python -m venv .venv
-.venv\Scripts\pip install -r ../requirements.txt
-```
-
-スキルのインストール先フォルダが分からない場合は、Claude Codeのチャットで
-「voucher-to-yayoiスキルの場所を教えて」と聞いてください。
-
-## 更新方法
-
-このリポジトリの中身を更新した後、各自のPCで以下を実行すると最新版が反映されます。
-
-```
-/plugin marketplace update voucher-to-yayoi-marketplace
-```
