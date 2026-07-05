@@ -19,8 +19,10 @@ import json
 import os
 import subprocess
 import sys
+import tkinter as tk
 import urllib.parse
 from pathlib import Path
+from tkinter import filedialog, messagebox, simpledialog
 
 APP_NAME = "voucher-to-yayoi-launcher"
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
@@ -163,13 +165,35 @@ def open_folder(folder: Path) -> None:
     os.startfile(str(folder))
 
 
-def main() -> None:
-    import tkinter as tk
-    from tkinter import filedialog, messagebox, simpledialog
+# 配色(生成済みアイコンの色味に合わせたポップな暖色系パレット)
+_COLOR_BG = "#FFF8F3"
+_COLOR_HEADER = "#FF7A59"
+_COLOR_HEADER_TEXT = "#FFFFFF"
+_COLOR_ACCENT = "#4ECDC4"
+_COLOR_ACCENT_DARK = "#37B6AC"
+_COLOR_SECONDARY = "#FFB86B"
+_COLOR_SECONDARY_DARK = "#F5A94E"
+_COLOR_TEXT = "#4A4A4A"
+_COLOR_MUTED = "#8A8178"
+_COLOR_CARD_BG = "#FFFFFF"
+_COLOR_SELECT_BG = "#FFE0D6"
+_COLOR_BORDER = "#F0E4DC"
 
+
+def _flat_button(parent, text, command, bg, fg="white", font=("Yu Gothic UI", 10, "bold")):
+    return tk.Button(
+        parent, text=text, command=command, bg=bg, fg=fg,
+        activebackground=bg, activeforeground=fg, font=font,
+        relief="flat", bd=0, padx=12, pady=8, cursor="hand2",
+        disabledforeground="#C9C2BB",
+    )
+
+
+def main() -> None:
     root_window = tk.Tk()
     root_window.title("証憑仕訳処理")
-    root_window.geometry("440x560")
+    root_window.geometry("460x600")
+    root_window.configure(bg=_COLOR_BG)
 
     state = {"root_folder": get_root_folder(), "selected_project": None}
 
@@ -286,47 +310,77 @@ def main() -> None:
         root_window.destroy()
         return
 
-    root_label = tk.Label(root_window, text=f"置き場所: {root_folder}", anchor="w", wraplength=420)
-    root_label.pack(fill="x", padx=10, pady=(10, 0))
+    header = tk.Frame(root_window, bg=_COLOR_HEADER)
+    header.pack(fill="x")
+    tk.Label(
+        header, text="🧾 証憑仕訳処理", bg=_COLOR_HEADER, fg=_COLOR_HEADER_TEXT,
+        font=("Yu Gothic UI", 16, "bold"), anchor="w",
+    ).pack(fill="x", padx=14, pady=12)
 
-    tk.Label(root_window, text="案件一覧(クリックで選択)", anchor="w").pack(fill="x", padx=10, pady=(10, 0))
+    root_label = tk.Label(
+        root_window, text=f"📂 置き場所: {root_folder}", anchor="w", wraplength=430,
+        bg=_COLOR_BG, fg=_COLOR_MUTED, font=("Yu Gothic UI", 9),
+    )
+    root_label.pack(fill="x", padx=14, pady=(10, 0))
 
-    list_frame = tk.Frame(root_window)
-    list_frame.pack(fill="both", expand=True, padx=10, pady=5)
+    tk.Label(
+        root_window, text="案件一覧(クリックで選択)", anchor="w",
+        bg=_COLOR_BG, fg=_COLOR_TEXT, font=("Yu Gothic UI", 10, "bold"),
+    ).pack(fill="x", padx=14, pady=(12, 4))
+
+    list_frame = tk.Frame(root_window, bg=_COLOR_BORDER, bd=0)
+    list_frame.pack(fill="both", expand=True, padx=14, pady=(0, 10))
     scrollbar = tk.Scrollbar(list_frame)
     scrollbar.pack(side="right", fill="y")
-    listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set, font=("Yu Gothic UI", 11))
+    listbox = tk.Listbox(
+        list_frame, yscrollcommand=scrollbar.set, font=("Yu Gothic UI", 11),
+        bg=_COLOR_CARD_BG, fg=_COLOR_TEXT, relief="flat", bd=0,
+        highlightthickness=1, highlightbackground=_COLOR_BORDER, highlightcolor=_COLOR_ACCENT,
+        selectbackground=_COLOR_SELECT_BG, selectforeground=_COLOR_TEXT,
+        activestyle="none",
+    )
     listbox.pack(side="left", fill="both", expand=True)
     scrollbar.config(command=listbox.yview)
     listbox.bind("<<ListboxSelect>>", on_listbox_select)
 
-    detail_frame = tk.LabelFrame(root_window, text="選んだ案件で作業を始める")
-    detail_frame.pack(fill="x", padx=10, pady=(0, 10))
+    detail_frame = tk.Frame(root_window, bg=_COLOR_CARD_BG, highlightthickness=1, highlightbackground=_COLOR_BORDER)
+    detail_frame.pack(fill="x", padx=14, pady=(0, 12))
 
-    selected_label = tk.Label(detail_frame, text="案件を選択してください", anchor="w")
-    selected_label.pack(fill="x", padx=8, pady=(6, 4))
+    tk.Frame(detail_frame, bg=_COLOR_ACCENT, height=4).pack(fill="x")
 
-    folder_buttons_frame = tk.Frame(detail_frame)
-    folder_buttons_frame.pack(fill="x", padx=8)
-    open_voucher_btn = tk.Button(
-        folder_buttons_frame, text="📁 証憑書類を開く", command=on_open_voucher_folder, state="disabled",
+    selected_label = tk.Label(
+        detail_frame, text="案件を選択してください", anchor="w",
+        bg=_COLOR_CARD_BG, fg=_COLOR_TEXT, font=("Yu Gothic UI", 10, "bold"),
     )
+    selected_label.pack(fill="x", padx=10, pady=(10, 6))
+
+    folder_buttons_frame = tk.Frame(detail_frame, bg=_COLOR_CARD_BG)
+    folder_buttons_frame.pack(fill="x", padx=10)
+    open_voucher_btn = _flat_button(
+        folder_buttons_frame, "📁 証憑書類を開く", on_open_voucher_folder, bg=_COLOR_SECONDARY,
+    )
+    open_voucher_btn.config(state="disabled", activebackground=_COLOR_SECONDARY_DARK)
     open_voucher_btn.pack(side="left", expand=True, fill="x")
-    open_reference_btn = tk.Button(
-        folder_buttons_frame, text="📁 参考資料ファイルを開く", command=on_open_reference_folder, state="disabled",
+    open_reference_btn = _flat_button(
+        folder_buttons_frame, "📁 参考資料ファイルを開く", on_open_reference_folder, bg=_COLOR_SECONDARY,
     )
+    open_reference_btn.config(state="disabled", activebackground=_COLOR_SECONDARY_DARK)
     open_reference_btn.pack(side="left", expand=True, fill="x", padx=(6, 0))
 
-    start_btn = tk.Button(
-        detail_frame, text="▶ 作業を開始する(Claudeを起動)", command=on_start_work, state="disabled",
-        bg="#2f6fdb", fg="white",
+    start_btn = _flat_button(
+        detail_frame, "▶  作業を開始する(Claudeを起動)", on_start_work, bg=_COLOR_ACCENT,
+        font=("Yu Gothic UI", 11, "bold"),
     )
-    start_btn.pack(fill="x", padx=8, pady=8)
+    start_btn.config(state="disabled", activebackground=_COLOR_ACCENT_DARK)
+    start_btn.pack(fill="x", padx=10, pady=10)
 
-    button_frame = tk.Frame(root_window)
-    button_frame.pack(fill="x", padx=10, pady=(0, 10))
-    tk.Button(button_frame, text="＋ 新規プロジェクト", command=on_new_project).pack(side="left")
-    tk.Button(button_frame, text="置き場所を変更", command=on_change_root_folder).pack(side="right")
+    button_frame = tk.Frame(root_window, bg=_COLOR_BG)
+    button_frame.pack(fill="x", padx=14, pady=(0, 14))
+    _flat_button(button_frame, "＋ 新規プロジェクト", on_new_project, bg=_COLOR_HEADER).pack(side="left")
+    _flat_button(
+        button_frame, "置き場所を変更", on_change_root_folder, bg=_COLOR_BORDER, fg=_COLOR_TEXT,
+        font=("Yu Gothic UI", 9),
+    ).pack(side="right")
 
     refresh_project_list()
     root_window.mainloop()

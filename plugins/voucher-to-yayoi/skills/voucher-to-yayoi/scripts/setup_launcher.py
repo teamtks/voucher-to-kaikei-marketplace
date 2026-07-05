@@ -32,13 +32,16 @@ def create_desktop_shortcut() -> Path:
         raise FileNotFoundError(f"デスクトップフォルダが見つかりません: {desktop}")
     shortcut_path = desktop / SHORTCUT_NAME
 
+    icon_path = skill_dir / "app_icon.ico"
+    icon_location = f"{icon_path},0" if icon_path.is_file() else f"{pythonw},0"
+
     ps_script = f"""
 $WshShell = New-Object -ComObject WScript.Shell
 $Shortcut = $WshShell.CreateShortcut("{shortcut_path}")
 $Shortcut.TargetPath = "{pythonw}"
 $Shortcut.Arguments = '"{launcher_path}"'
 $Shortcut.WorkingDirectory = "{skill_dir}"
-$Shortcut.IconLocation = "{pythonw},0"
+$Shortcut.IconLocation = "{icon_location}"
 $Shortcut.Description = "証憑仕訳処理ツールを開く"
 $Shortcut.Save()
 """
