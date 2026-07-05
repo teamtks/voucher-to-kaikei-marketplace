@@ -10,7 +10,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-SHORTCUT_NAME = "証憑仕訳処理.lnk"
+SHORTCUT_NAME = "仕訳.TeamTKS.lnk"
+_OLD_SHORTCUT_NAMES = ("証憑仕訳処理.lnk",)  # 旧名称。残っていれば整理する。
 
 
 def find_pythonw() -> Path:
@@ -42,7 +43,7 @@ $Shortcut.TargetPath = "{pythonw}"
 $Shortcut.Arguments = '"{launcher_path}"'
 $Shortcut.WorkingDirectory = "{skill_dir}"
 $Shortcut.IconLocation = "{icon_location}"
-$Shortcut.Description = "証憑仕訳処理ツールを開く"
+$Shortcut.Description = "仕訳.TeamTKS — 証憑仕訳処理ツール"
 $Shortcut.Save()
 """
     result = subprocess.run(
@@ -54,9 +55,24 @@ $Shortcut.Save()
     return shortcut_path
 
 
+def find_old_shortcuts() -> "list[Path]":
+    """旧名称のショートカットを探す(削除はしない。利用者の許可なく削除しない
+    運用ルールのため、見つけて知らせるだけにとどめる)。"""
+    desktop = Path.home() / "Desktop"
+    return [desktop / name for name in _OLD_SHORTCUT_NAMES if (desktop / name).is_file()]
+
+
 def main() -> None:
     shortcut_path = create_desktop_shortcut()
     print(f"デスクトップにショートカットを作成しました: {shortcut_path}")
+
+    old_shortcuts = find_old_shortcuts()
+    if old_shortcuts:
+        names = "、".join(p.name for p in old_shortcuts)
+        print(
+            f"旧名称のショートカット({names})がデスクトップに残っています。"
+            "不要であれば、利用者ご自身で削除してください(無断では削除しません)。"
+        )
 
 
 if __name__ == "__main__":

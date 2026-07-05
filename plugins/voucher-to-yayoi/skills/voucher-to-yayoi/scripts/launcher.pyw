@@ -40,7 +40,7 @@ REFERENCE_SUBFOLDER = "参考資料ファイル"
 CLAUDE_MD_TEMPLATE = """# このフォルダについて
 
 このフォルダは、証憑書類(領収書・請求書)から弥生会計の仕訳データを作成するための
-案件フォルダです。「証憑仕訳処理」ランチャー(デスクトップのショートカット)から
+案件フォルダです。「仕訳.TeamTKS」ランチャー(デスクトップのショートカット)から
 作成・オープンされています。
 
 ## フォルダの中身と役割
@@ -71,7 +71,7 @@ CLAUDE_MD_TEMPLATE = """# このフォルダについて
 ## このフォルダの開き方
 
 次回以降も、このフォルダはエクスプローラーから直接開くのではなく、デスクトップの
-「証憑仕訳処理」ショートカット(ランチャー)から選んで開くこと。ランチャーを使うと、
+「仕訳.TeamTKS」ショートカット(ランチャー)から選んで開くこと。ランチャーを使うと、
 証憑書類・参考資料ファイルの各フォルダをワンクリックで開けるほか、常に最新版の
 スキルが使われる状態が保たれる。
 
@@ -191,7 +191,7 @@ def _flat_button(parent, text, command, bg, fg="white", font=("Yu Gothic UI", 10
 
 def main() -> None:
     root_window = tk.Tk()
-    root_window.title("証憑仕訳処理")
+    root_window.title("仕訳.TeamTKS")
     root_window.geometry("460x600")
     root_window.configure(bg=_COLOR_BG)
 
@@ -313,7 +313,7 @@ def main() -> None:
     header = tk.Frame(root_window, bg=_COLOR_HEADER)
     header.pack(fill="x")
     tk.Label(
-        header, text="🧾 証憑仕訳処理", bg=_COLOR_HEADER, fg=_COLOR_HEADER_TEXT,
+        header, text="🧾 仕訳.TeamTKS", bg=_COLOR_HEADER, fg=_COLOR_HEADER_TEXT,
         font=("Yu Gothic UI", 16, "bold"), anchor="w",
     ).pack(fill="x", padx=14, pady=12)
 
