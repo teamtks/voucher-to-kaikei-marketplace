@@ -10,16 +10,18 @@
 - どちらの側が「分割されていない側(単一の実科目)」かは、伝票内の全LegRowで
   その側の科目情報(勘定科目・補助科目・部門・税区分)が完全一致しているかどうかで
   自動判定する。両側とも分割されている伝票(1伝票内で借方も貸方も複数の異なる
-  実科目を持つ)は、このフォーマットでは表現できないためエラーとする。
+  実科目を持つ)は、split_side="manual"が明示されない限りエラーとする。
 
-注意(対象外とする複合仕訳のパターン): 実データ調査では、1伝票内で「複合」の
-出現側(借方/貸方)が明細ごとに入れ替わり、非分割側の合計と分割側明細の合計が
-一致しない、より複雑な複合仕訳(例: 銀行入金1件に対し、収益計上と経費相殺を
-同時に行うような手動仕訳)も存在することを確認した。これは証憑書類からの
-自動起票では通常発生しない、人手による特殊な振替仕訳であるため、本モジュール
-は意図的にサポート対象外とする。そのような入力は上記の「両側とも分割」エラー
-などで弾かれるか、期待と異なる出力になり得るため、対応が必要な場合は弥生会計上
-で直接入力すること。
+自由な複合仕訳(split_side="manual"): 実データ調査(給与仕訳)では、1伝票内で
+「複合」の出現側(借方/貸方)が明細ごとに入れ替わり、非分割側の合計と分割側明細の
+合計が一致しない、より複雑な複合仕訳が実在することを確認した(例: 役員報酬・給料・
+通勤費を借方に計上しつつ、貸方には現金/未払金/預り金/法定福利費など複数の異なる
+科目が並び、さらに家賃振替のような全く別の単純仕訳1行が同じ伝票に混在する)。
+このような伝票は「非分割側が単一科目」という前提が成り立たないため自動判定できず、
+呼び出し側が各LegRowのdebit/creditを(「複合」プレースホルダーを含め)そのまま
+指定し、split_side="manual"を明示する。この場合、本モジュールは自動集計・自動
+判定を一切行わず、各LegRowをそのまま1出力行に変換する(先頭="2110"→中間(0件
+以上)="2100"→最終="2101"、タイプは全行"3")。
 """
 from collections import OrderedDict
 from dataclasses import replace
@@ -110,19 +112,24 @@ def build_voucher_rows(voucher_id: str, legs: list[LegRow], denpyo_no: int) -> l
             )
         ]
 
-    debit_keys = {_account_key(leg.debit) for leg in legs}
-    credit_keys = {_account_key(leg.credit) for leg in legs}
-
     explicit_sides = {leg.split_side for leg in legs if leg.split_side is not None}
     if len(explicit_sides) > 1:
         raise VoucherBuildError(
             f"伝票 {voucher_id}: 明細ごとにsplit_sideの指定が食い違っています({explicit_sides})"
         )
     explicit_side = next(iter(explicit_sides), None)
+
+    if explicit_side == "manual":
+        return _build_manual_compound_rows(legs, denpyo_no)
+
     if explicit_side is not None and explicit_side not in ("debit", "credit"):
         raise VoucherBuildError(
-            f"伝票 {voucher_id}: split_sideは'debit'または'credit'を指定してください(指定値: {explicit_side})"
+            f"伝票 {voucher_id}: split_sideは'debit'・'credit'・'manual'のいずれかを"
+            f"指定してください(指定値: {explicit_side})"
         )
+
+    debit_keys = {_account_key(leg.debit) for leg in legs}
+    credit_keys = {_account_key(leg.credit) for leg in legs}
 
     if explicit_side is not None:
         split_side = explicit_side
@@ -145,8 +152,10 @@ def build_voucher_rows(voucher_id: str, legs: list[LegRow], denpyo_no: int) -> l
     else:
         raise VoucherBuildError(
             f"伝票 {voucher_id}: 借方・貸方の両方が複数科目に分割されています。"
-            "このフォーマットでは1伝票につきどちらか一方のみ分割に対応しています。"
-            "伝票を分けて入力してください。"
+            "自動判定では1伝票につきどちらか一方のみ分割に対応しています。"
+            "給与仕訳のように意図してこの構成にする場合は、各明細のdebit/creditを"
+            "(「複合」プレースホルダーを含め)明示的に指定したうえでsplit_side="
+            "\"manual\"を指定してください。"
         )
 
     primary_side_entry = first.credit if split_side == "debit" else first.debit
@@ -202,6 +211,38 @@ def build_voucher_rows(voucher_id: str, legs: list[LegRow], denpyo_no: int) -> l
             )
         )
 
+    return rows
+
+
+def _build_manual_compound_rows(legs: list[LegRow], denpyo_no: int) -> list[YayoiOutputRow]:
+    """split_side="manual"の伝票: 各明細のdebit/creditをそのまま出力行にする。
+
+    自動集計・自動判定を一切行わないため、「複合」プレースホルダーが必要な
+    明細には、呼び出し側があらかじめAccountEntry(account="複合",
+    tax_category="対象外", amount=その明細の金額)を設定しておく必要がある。
+    """
+    rows: list[YayoiOutputRow] = []
+    for i, leg in enumerate(legs):
+        if i == 0:
+            flag = FLAG_COMPOUND_FIRST
+        elif i == len(legs) - 1:
+            flag = FLAG_COMPOUND_LAST
+        else:
+            flag = FLAG_COMPOUND_MIDDLE
+        rows.append(
+            YayoiOutputRow(
+                flag=flag,
+                denpyo_no=denpyo_no,
+                closing_flag=leg.closing_flag,
+                transaction_date=leg.transaction_date,
+                debit=leg.debit,
+                credit=leg.credit,
+                description=leg.description,
+                row_type=TYPE_COMPOUND,
+                memo=leg.memo,
+                built_manually=True,
+            )
+        )
     return rows
 
 

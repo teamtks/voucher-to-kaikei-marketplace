@@ -1,0 +1,11 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# ランチャーのローカル設定(PCごとに異なるため、絶対にコミットしない)
+config.json
+
+# OS/エディタの生成物
+Thumbs.db
+.DS_Store

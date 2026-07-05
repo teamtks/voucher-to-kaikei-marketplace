@@ -72,6 +72,11 @@ def validate_output_rows(rows: list[YayoiOutputRow]) -> list[str]:
         if not any(r.flag == FLAG_COMPOUND_LAST for r in group_rows):
             errors.append(f"伝票No {denpyo_no}: 複合仕訳の最終行(識別フラグ2101)がありません")
 
+        # split_side="manual"(自由な複合仕訳)は非分割側の合計という概念が
+        # そもそも成立しないため、このチェックは自動集計モードの伝票にのみ行う。
+        if any(r.built_manually for r in group_rows):
+            continue
+
         header_amount = header.debit.amount if header.debit.account == PLACEHOLDER_ACCOUNT else header.credit.amount
         detail_total = 0
         for d in details:

@@ -51,7 +51,14 @@ class LegRow:
     # 明示する。借方・貸方の科目情報からどちらが単一の非分割側か自動判定できる
     # 場合は省略可(None)。分割側の全明細が偶然同じ科目・税区分になっている等、
     # 自動判定できない場合はレビュー側で明示する必要がある。
-    split_side: str | None = None  # "debit" または "credit"
+    # "manual"を指定した場合、各明細のdebit/credit(「複合」プレースホルダーを
+    # 含む)をそのまま出力行にする(自動集計・自動判定を一切行わない)。給与仕訳の
+    # ように、実科目が現れる側が明細ごとに入れ替わり、非分割側の合計と分割側の
+    # 合計が一致しないような自由な複合仕訳を表現する場合に使う。この場合、
+    # 「複合」プレースホルダーが必要な明細には呼び出し側が事前にAccountEntry
+    # (account="複合", tax_category="対象外", amount=その明細の金額)を設定して
+    # おく必要がある。
+    split_side: str | None = None  # "debit" / "credit" / "manual"
 
 
 @dataclass
@@ -72,3 +79,6 @@ class YayoiOutputRow:
     tag1: str = "0"
     tag2: str = "0"
     adjustment: str = "no"
+    # split_side="manual"(自由な複合仕訳)で組み立てられた行かどうか。
+    # validators側で、自動集計モード専用の合計チェックを除外する判定に使う。
+    built_manually: bool = False
