@@ -97,10 +97,11 @@ def build_html(data: dict, suggested_filename: str) -> str:
   #listPane h1 {{ font-size: 16px; margin: 4px 8px 12px; color: #333; }}
   #toolbar {{ display: flex; gap: 8px; margin: 4px 8px 10px; }}
   #toolbar button {{
+    appearance: none; -webkit-appearance: none;
     font-size: 13px; padding: 7px 12px; border-radius: 6px; border: 1px solid #ccc;
-    background: #fff; cursor: pointer;
+    background: #fff; color: #333; cursor: pointer;
   }}
-  #saveBtn {{ background: #2f6fdb; color: #fff; border-color: #2f6fdb; font-weight: bold; }}
+  #toolbar #saveBtn {{ background: #2f6fdb; color: #fff; border-color: #2f6fdb; font-weight: bold; }}
   #saveBtn:hover {{ background: #2559b3; }}
   #resetBtn:hover {{ background: #f2f2f2; }}
   #dirtyBanner {{
@@ -144,8 +145,12 @@ def build_html(data: dict, suggested_filename: str) -> str:
   .f-sub {{ width: 66px; }}
   .f-dept {{ width: 60px; }}
   .f-tax {{ width: 108px; }}
-  .f-amount, .f-taxamount {{ width: 84px; text-align: right; font-variant-numeric: tabular-nums; }}
-  .f-desc {{ width: 150px; }}
+  .f-amount {{
+    width: 140px; text-align: right; font-variant-numeric: tabular-nums;
+    font-size: 15px; font-weight: bold; padding: 6px 8px;
+  }}
+  .f-taxamount {{ width: 84px; text-align: right; font-variant-numeric: tabular-nums; }}
+  .f-desc-wide {{ flex: 1 1 100%; width: 100%; }}
   .f-memo {{ width: 90px; }}
   .del-leg-btn {{
     margin-left: auto; border: none; background: none; color: #b23c17; cursor: pointer;
@@ -193,6 +198,10 @@ def build_html(data: dict, suggested_filename: str) -> str:
     return n.toLocaleString("ja-JP");
   }}
 
+  function parseAmount(str) {{
+    return parseInt(String(str).replace(/,/g, ""), 10) || 0;
+  }}
+
   function cloneInitial() {{
     const d = JSON.parse(JSON.stringify(INITIAL_DATA));
     d.legs = d.legs || [];
@@ -238,9 +247,13 @@ def build_html(data: dict, suggested_filename: str) -> str:
           <input class="f-tax" data-uid="${{leg._uid}}" data-field="credit.tax_category" value="${{esc(leg.credit.tax_category)}}" placeholder="税区分">
         </div>
         <div class="leg-fields-row">
-          <input class="f-amount" type="number" data-uid="${{leg._uid}}" data-field="__amount" value="${{Number(leg.debit.amount) || 0}}" placeholder="金額">
-          <input class="f-taxamount" type="number" data-uid="${{leg._uid}}" data-field="__tax_amount" value="${{Number(leg.debit.tax_amount) || 0}}" placeholder="消費税額">
-          <input class="f-desc" data-uid="${{leg._uid}}" data-field="description" value="${{esc(leg.description)}}" placeholder="摘要">
+          <input class="f-amount" type="text" inputmode="numeric" data-uid="${{leg._uid}}" data-field="__amount" value="${{fmtAmount(leg.debit.amount)}}" placeholder="金額">
+        </div>
+        <div class="leg-fields-row">
+          <input class="f-desc-wide" data-uid="${{leg._uid}}" data-field="description" value="${{esc(leg.description)}}" placeholder="摘要">
+        </div>
+        <div class="leg-fields-row">
+          <input class="f-taxamount" type="text" inputmode="numeric" data-uid="${{leg._uid}}" data-field="__tax_amount" value="${{fmtAmount(leg.debit.tax_amount)}}" placeholder="消費税額">
           <input class="f-memo" data-uid="${{leg._uid}}" data-field="memo" value="${{esc(leg.memo)}}" placeholder="メモ">
           <button type="button" class="del-leg-btn" data-uid="${{leg._uid}}" title="この明細行を削除">✕ 削除</button>
         </div>
@@ -320,8 +333,11 @@ def build_html(data: dict, suggested_filename: str) -> str:
       leg_no: maxLegNo + 1,
       transaction_date: first.transaction_date,
       closing_flag: first.closing_flag,
-      debit: {{ account: "", sub_account: "", department: "", tax_category: "", amount: 0, tax_amount: 0 }},
-      credit: {{ account: "", sub_account: "", department: "", tax_category: "", amount: 0, tax_amount: 0 }},
+      // 直前の明細の借方・貸方をコピーしておく。複合仕訳では通常どちらか一方
+      // (現金・預金口座など)が全明細で共通なので、変更が必要な側だけ書き換え
+      // れば済むようにするため(もう片方は自動的に「同じ科目」として扱われる)。
+      debit: Object.assign({{}}, first.debit, {{ amount: 0, tax_amount: 0 }}),
+      credit: Object.assign({{}}, first.credit, {{ amount: 0, tax_amount: 0 }}),
       description: "",
       memo: "",
       split_side: first.split_side ?? null,
@@ -364,11 +380,11 @@ def build_html(data: dict, suggested_filename: str) -> str:
     const leg = uid ? findLegByUid(uid) : null;
     if (!leg) return;
     if (field === "__amount") {{
-      const v = parseInt(t.value, 10) || 0;
+      const v = parseAmount(t.value);
       leg.debit.amount = v;
       leg.credit.amount = v;
     }} else if (field === "__tax_amount") {{
-      const v = parseInt(t.value, 10) || 0;
+      const v = parseAmount(t.value);
       leg.debit.tax_amount = v;
       leg.credit.tax_amount = v;
     }} else if (field === "description" || field === "memo") {{
@@ -423,6 +439,14 @@ def build_html(data: dict, suggested_filename: str) -> str:
   const container = document.getElementById("cardsContainer");
   container.addEventListener("input", handleFieldEvent);
   container.addEventListener("change", handleFieldEvent);
+  container.addEventListener("focusout", e => {{
+    const t = e.target;
+    if (!(t.classList && (t.classList.contains("f-amount") || t.classList.contains("f-taxamount")))) return;
+    const leg = findLegByUid(t.dataset.uid);
+    if (!leg) return;
+    const value = t.dataset.field === "__amount" ? leg.debit.amount : leg.debit.tax_amount;
+    t.value = fmtAmount(value);
+  }});
   container.addEventListener("click", e => {{
     if (e.target.classList.contains("del-leg-btn")) {{ e.stopPropagation(); removeLeg(e.target.dataset.uid); return; }}
     if (e.target.classList.contains("add-leg-btn")) {{ e.stopPropagation(); addLeg(e.target.dataset.voucherId); return; }}
