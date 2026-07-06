@@ -9,6 +9,9 @@ from collections import defaultdict
 from .models import FLAG_COMPOUND_FIRST, FLAG_COMPOUND_LAST, PLACEHOLDER_ACCOUNT, YayoiOutputRow
 from .voucher_builder import LegRow
 
+# 弥生会計の仕様: 摘要欄は全角32文字まで(CP932で1文字1〜2バイト換算、64バイトまで)。
+DESCRIPTION_MAX_BYTES = 64
+
 
 class ValidationError(Exception):
     """複数件のエラーメッセージをまとめて保持する。"""
@@ -51,6 +54,12 @@ def validate_output_rows(rows: list[YayoiOutputRow]) -> list[str]:
             )
         if not row.debit.account or not row.credit.account:
             errors.append(f"伝票No {row.denpyo_no}: 勘定科目が空欄の行があります")
+        desc_bytes = len(row.description.encode("cp932", errors="replace"))
+        if desc_bytes > DESCRIPTION_MAX_BYTES:
+            errors.append(
+                f"伝票No {row.denpyo_no}: 摘要が全角32文字(64バイト)を超えています"
+                f"({desc_bytes}バイト): {row.description}"
+            )
         denpyo_no_dates[row.denpyo_no].add(row.transaction_date)
 
     for denpyo_no, dates in denpyo_no_dates.items():
