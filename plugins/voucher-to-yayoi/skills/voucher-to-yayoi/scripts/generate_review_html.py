@@ -280,9 +280,19 @@ def build_html(data: dict, suggested_filename: str) -> str:
   }}
 
   function updateCardTotals(voucherId) {{
-    const legs = VOUCHER_DATA.legs.filter(l => l.voucher_id === voucherId);
-    const debitTotal = legs.reduce((s, l) => s + (Number(l.debit.amount) || 0), 0);
-    const creditTotal = legs.reduce((s, l) => s + (Number(l.credit.amount) || 0), 0);
+    const legs = VOUCHER_DATA.legs.filter(l => l.voucher_id === voucherId)
+      .sort((a, b) => (a.leg_no || 0) - (b.leg_no || 0));
+    // "manual"の複合仕訳は、各legが最終出力行そのもの(合計行＋明細行)を表すため、
+    // 全legの金額を単純合計すると二重計上になる。合計行(先頭のleg)の金額を使う。
+    const isManual = legs.some(l => l.split_side === "manual");
+    let debitTotal, creditTotal;
+    if (isManual && legs.length > 0) {{
+      debitTotal = Number(legs[0].debit.amount) || 0;
+      creditTotal = Number(legs[0].credit.amount) || 0;
+    }} else {{
+      debitTotal = legs.reduce((s, l) => s + (Number(l.debit.amount) || 0), 0);
+      creditTotal = legs.reduce((s, l) => s + (Number(l.credit.amount) || 0), 0);
+    }}
     const span = document.querySelector('.card-total[data-total-for="' + CSS.escape(voucherId) + '"]');
     if (!span) return;
     if (debitTotal === creditTotal) {{
