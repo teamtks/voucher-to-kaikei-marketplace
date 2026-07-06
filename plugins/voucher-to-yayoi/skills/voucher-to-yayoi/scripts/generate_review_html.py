@@ -43,8 +43,26 @@ def _to_data_uri(path: str) -> str | None:
     return f"data:{_guess_mime(path)};base64,{data}"
 
 
+def _guess_project_folder(legs: list) -> "str | None":
+    """source_imageのパスから、案件フォルダ(証憑書類/参考資料ファイルの親)を推測する。
+
+    ブラウザのダウンロードはセキュリティ上の理由でJS側から保存先フォルダを直接
+    指定できないため、保存ダイアログでどこを選べばよいかユーザーに示すために使う。
+    """
+    for leg in legs:
+        path = leg.get("source_image", "")
+        if not path:
+            continue
+        parent = Path(path).parent
+        if parent.name in ("証憑書類", "参考資料ファイル"):
+            return str(parent.parent)
+        return str(parent)
+    return None
+
+
 def build_html(data: dict, suggested_filename: str) -> str:
     legs = data.get("legs", [])
+    project_folder = _guess_project_folder(legs)
 
     # 画像は同じファイルが複数の伝票から参照されることがあるため、重複排除して埋め込む
     image_uris: "dict[str, str]" = {}
@@ -67,6 +85,14 @@ def build_html(data: dict, suggested_filename: str) -> str:
         <div class="global-warning">
           以下の証憑画像ファイルが見つかりませんでした(パスをご確認ください):
           <ul>{items}</ul>
+        </div>"""
+
+    save_hint = ""
+    if project_folder:
+        save_hint = f"""
+        <div id="saveHint">
+          保存先を選ぶ画面が出た場合は、次のフォルダを選んでください:<br>
+          <code>{html.escape(project_folder)}</code>
         </div>"""
 
     initial_data_json = json.dumps(data, ensure_ascii=False)
@@ -95,6 +121,11 @@ def build_html(data: dict, suggested_filename: str) -> str:
     flex: 1 1 50%; overflow-y: auto; padding: 12px; border-left: 1px solid #ddd;
   }}
   #listPane h1 {{ font-size: 16px; margin: 4px 8px 12px; color: #333; }}
+  #saveHint {{
+    background: #eef4ff; border: 1px solid #cfe0fb; border-radius: 6px;
+    padding: 8px 12px; margin: 0 8px 10px; font-size: 12px; color: #2b4a7a; line-height: 1.6;
+  }}
+  #saveHint code {{ font-size: 12px; word-break: break-all; }}
   #toolbar {{ display: flex; gap: 8px; margin: 4px 8px 10px; }}
   #toolbar button {{
     appearance: none; -webkit-appearance: none;
@@ -168,6 +199,7 @@ def build_html(data: dict, suggested_filename: str) -> str:
 <body>
   <div id="imagePane"><div class="placeholder">左の一覧から仕訳を選んでください</div></div>
   <div id="listPane">
+    {save_hint}
     <div id="toolbar">
       <button id="saveBtn" type="button">変更をJSONとして保存(ダウンロード)</button>
       <button id="resetBtn" type="button">元に戻す</button>
