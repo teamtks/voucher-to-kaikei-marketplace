@@ -35,6 +35,25 @@ IGNORED_NAMES = {"desktop.ini", "Thumbs.db"}
 VOUCHER_SUBFOLDER = "証憑書類"
 REFERENCE_SUBFOLDER = "参考資料ファイル"
 
+# 「㈲」「㈱」等のCJK互換文字は、Claude Desktopがフォルダを開くリンクを処理する際に
+# 正規化されて別の文字列(例:「(有)」)に変わってしまい、実際のフォルダ名と
+# 一致しなくなる不具合が実機で確認された。案件名に含まれていたら、素の文字列に
+# 自動的に置き換える。
+_UNSAFE_NAME_CHARS = {
+    "㈲": "有限会社 ",
+    "㈱": "株式会社 ",
+    "㈳": "社団法人 ",
+    "㈴": "合名会社 ",
+    "㈵": "合資会社 ",
+    "㈶": "財団法人 ",
+}
+
+
+def sanitize_project_name(name: str) -> str:
+    for bad, good in _UNSAFE_NAME_CHARS.items():
+        name = name.replace(bad, good)
+    return name.strip()
+
 # 新規プロジェクトに同梱するCLAUDE.md(社内の決まり事)のひな形。
 # Claude Codeがこのフォルダで作業を始めるたびに自動的に読み込まれる。
 CLAUDE_MD_TEMPLATE = """# このフォルダについて
@@ -136,7 +155,7 @@ def list_projects(root: Path) -> list[str]:
 
 def create_project(root: Path, name: str) -> Path:
     """案件名フォルダを、証憑書類/参考資料ファイルの空フォルダとCLAUDE.md付きで作成する。"""
-    name = name.strip()
+    name = sanitize_project_name(name)
     if not name:
         raise ValueError("案件名が空です")
     project_dir = root / name
@@ -173,11 +192,12 @@ _COLOR_ACCENT = "#4ECDC4"
 _COLOR_ACCENT_DARK = "#37B6AC"
 _COLOR_SECONDARY = "#FFB86B"
 _COLOR_SECONDARY_DARK = "#F5A94E"
-_COLOR_TEXT = "#4A4A4A"
-_COLOR_MUTED = "#8A8178"
+_COLOR_TEXT = "#4E342E"
+_COLOR_MUTED = "#8D6E63"
 _COLOR_CARD_BG = "#FFFFFF"
 _COLOR_SELECT_BG = "#FFE0D6"
 _COLOR_BORDER = "#F0E4DC"
+_COLOR_BORDEAUX = "#722F37"
 
 
 def _flat_button(parent, text, command, bg, fg="white", font=("Yu Gothic UI", 10, "bold")):
@@ -189,7 +209,24 @@ def _flat_button(parent, text, command, bg, fg="white", font=("Yu Gothic UI", 10
     )
 
 
+def _enable_windows_dpi_awareness() -> None:
+    """WindowsのディスプレイのDPI拡大設定(125%/150%等)がかかっている場合、
+    素のtkinterはこれを考慮せず描画するため、文字がぼやけて薄く・読みにくく
+    見えることがある。これをOSに伝えて、文字をくっきり描画させる。"""
+    try:
+        import ctypes
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except Exception:
+        try:
+            import ctypes
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
 def main() -> None:
+    _enable_windows_dpi_awareness()
+
     root_window = tk.Tk()
     root_window.title("仕訳.TeamTKS")
     root_window.geometry("460x600")
@@ -333,7 +370,7 @@ def main() -> None:
     scrollbar = tk.Scrollbar(list_frame)
     scrollbar.pack(side="right", fill="y")
     listbox = tk.Listbox(
-        list_frame, yscrollcommand=scrollbar.set, font=("Yu Gothic UI", 11),
+        list_frame, yscrollcommand=scrollbar.set, font=("Yu Gothic UI", 12, "bold"),
         bg=_COLOR_CARD_BG, fg=_COLOR_TEXT, relief="flat", bd=0,
         highlightthickness=1, highlightbackground=_COLOR_BORDER, highlightcolor=_COLOR_ACCENT,
         selectbackground=_COLOR_SELECT_BG, selectforeground=_COLOR_TEXT,
@@ -357,18 +394,18 @@ def main() -> None:
     folder_buttons_frame = tk.Frame(detail_frame, bg=_COLOR_CARD_BG)
     folder_buttons_frame.pack(fill="x", padx=10)
     open_voucher_btn = _flat_button(
-        folder_buttons_frame, "📁 証憑書類を開く", on_open_voucher_folder, bg=_COLOR_SECONDARY,
+        folder_buttons_frame, "📁 証憑書類を開く", on_open_voucher_folder, bg=_COLOR_SECONDARY, fg=_COLOR_BORDEAUX,
     )
     open_voucher_btn.config(state="disabled", activebackground=_COLOR_SECONDARY_DARK)
     open_voucher_btn.pack(side="left", expand=True, fill="x")
     open_reference_btn = _flat_button(
-        folder_buttons_frame, "📁 参考資料ファイルを開く", on_open_reference_folder, bg=_COLOR_SECONDARY,
+        folder_buttons_frame, "📁 参考資料ファイルを開く", on_open_reference_folder, bg=_COLOR_SECONDARY, fg=_COLOR_BORDEAUX,
     )
     open_reference_btn.config(state="disabled", activebackground=_COLOR_SECONDARY_DARK)
     open_reference_btn.pack(side="left", expand=True, fill="x", padx=(6, 0))
 
     start_btn = _flat_button(
-        detail_frame, "▶  作業を開始する(Claudeを起動)", on_start_work, bg=_COLOR_ACCENT,
+        detail_frame, "▶  作業を開始する(Claudeを起動)", on_start_work, bg=_COLOR_ACCENT, fg=_COLOR_BORDEAUX,
         font=("Yu Gothic UI", 11, "bold"),
     )
     start_btn.config(state="disabled", activebackground=_COLOR_ACCENT_DARK)
