@@ -1,7 +1,7 @@
 {
   "name": "voucher-to-yayoi",
-  "description": "領収書・請求書のPDF/JPGから弥生会計インポート用データを作成するスキル",
-  "version": "1.0.0",
+  "description": "領収書・請求書のPDF/JPGから弥生会計・会計大将インポート用データを作成するスキル",
+  "version": "1.1.0",
   "author": {
     "name": "社内経理チーム"
   }

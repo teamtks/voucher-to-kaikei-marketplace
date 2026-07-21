@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
   "name": "voucher-to-yayoi-marketplace",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "証憑書類から弥生会計インポートデータを作成する社内共有スキル集",
   "owner": {
     "name": "社内経理チーム",
@@ -11,8 +11,8 @@
     {
       "name": "voucher-to-yayoi",
       "displayName": "証憑→弥生インポートデータ作成",
-      "description": "領収書・請求書のPDF/JPGから弥生会計インポート用データを作成する",
-      "version": "1.0.0",
+      "description": "領収書・請求書のPDF/JPGから弥生会計・会計大将インポート用データを作成する",
+      "version": "1.1.0",
       "author": {
         "name": "社内経理チーム"
       },

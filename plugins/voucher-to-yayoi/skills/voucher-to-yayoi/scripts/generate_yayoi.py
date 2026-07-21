@@ -24,45 +24,14 @@
 """
 import json
 import sys
-from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from lib.models import AccountEntry, LegRow
 from lib.validators import ValidationError, validate_output_rows
 from lib.voucher_builder import VoucherBuildError, build_all_vouchers
+from lib.voucher_input import load_legs
 from lib.yayoi_writer import write_yayoi_file
-
-
-def _account_entry(d: dict) -> AccountEntry:
-    return AccountEntry(
-        account=d["account"],
-        sub_account=d.get("sub_account", ""),
-        department=d.get("department", ""),
-        tax_category=d.get("tax_category", ""),
-        amount=int(d["amount"]),
-        tax_amount=int(d.get("tax_amount", 0)),
-    )
-
-
-def load_legs(data: dict) -> list[LegRow]:
-    legs = []
-    for i, leg in enumerate(data["legs"]):
-        legs.append(
-            LegRow(
-                voucher_id=leg["voucher_id"],
-                leg_no=leg.get("leg_no", i + 1),
-                transaction_date=date.fromisoformat(leg["transaction_date"]),
-                debit=_account_entry(leg["debit"]),
-                credit=_account_entry(leg["credit"]),
-                closing_flag=leg.get("closing_flag", ""),
-                description=leg.get("description", ""),
-                memo=leg.get("memo", ""),
-                split_side=leg.get("split_side"),
-            )
-        )
-    return legs
 
 
 def main():
