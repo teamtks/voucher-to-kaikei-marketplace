@@ -52,9 +52,10 @@ _INVOICE_NO_RE = re.compile(r"T\d{13}")
 _POSTAL_RE = re.compile(r"〒?\s?\d{3}-\d{4}")
 _ADDRESS_SUFFIX_RE = re.compile(r"\d+(丁目|番地|号)")
 _BANK_NAME_RE = re.compile(r".+(銀行|信用金庫|信用組合|労働金庫|農業協同組合)")
-_BRANCH_NAME_RE = re.compile(r".+(支店|出張所)$")
+_BRANCH_NAME_RE = re.compile(r".+(支店|出張所)")
 _BRANCH_NO_RE = re.compile(r"店番[:：]?\s*\d{1,4}")
 _ACCOUNT_NO_RE = re.compile(r"(口座番号|口座No\.?)[:：]?\s*\d{4,10}")
+_ACCOUNT_PLAIN_RE = re.compile(r"口座\s*[:：]?\s*(普通|当座|定期)?\s*\d{4,10}")
 _CARD_COMPANY_RE = re.compile(r".+(カード株式会社|カード\(株\))")
 _CARD_NO_RE = re.compile(r"(\d{4}[\s-]){3}\d{4}")
 
@@ -80,6 +81,8 @@ def _is_sensitive_line(text: str) -> bool:
     if _BRANCH_NO_RE.search(text):
         return True
     if _ACCOUNT_NO_RE.search(text):
+        return True
+    if _ACCOUNT_PLAIN_RE.search(text):
         return True
     if _CARD_COMPANY_RE.match(text):
         return True
