@@ -6,9 +6,12 @@
 使い方:
     python setup_launcher.py
 """
-import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from lib.desktop_shortcut import create_shortcut, desktop_dir
 
 SHORTCUT_NAME = "仕訳.TeamTKS.lnk"
 _OLD_SHORTCUT_NAMES = ("証憑仕訳処理.lnk",)  # 旧名称。残っていれば整理する。
@@ -28,31 +31,14 @@ def create_desktop_shortcut() -> Path:
         raise FileNotFoundError(f"launcher.pywが見つかりません: {launcher_path}")
 
     pythonw = find_pythonw()
-    desktop = Path.home() / "Desktop"
-    if not desktop.is_dir():
-        raise FileNotFoundError(f"デスクトップフォルダが見つかりません: {desktop}")
-    shortcut_path = desktop / SHORTCUT_NAME
-
-    icon_path = skill_dir / "app_icon.ico"
-    icon_location = f"{icon_path},0" if icon_path.is_file() else f"{pythonw},0"
-
-    ps_script = f"""
-$WshShell = New-Object -ComObject WScript.Shell
-$Shortcut = $WshShell.CreateShortcut("{shortcut_path}")
-$Shortcut.TargetPath = "{pythonw}"
-$Shortcut.Arguments = '"{launcher_path}"'
-$Shortcut.WorkingDirectory = "{skill_dir}"
-$Shortcut.IconLocation = "{icon_location}"
-$Shortcut.Description = "仕訳.TeamTKS — 証憑仕訳処理ツール"
-$Shortcut.Save()
-"""
-    result = subprocess.run(
-        ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
-        capture_output=True, text=True,
+    return create_shortcut(
+        desktop_dir() / SHORTCUT_NAME,
+        pythonw,
+        arguments=f'"{launcher_path}"',
+        working_directory=skill_dir,
+        icon_path=skill_dir / "app_icon.ico",
+        description="仕訳.TeamTKS(証憑仕訳処理ツール)",
     )
-    if result.returncode != 0:
-        raise RuntimeError(f"ショートカット作成に失敗しました: {result.stderr}")
-    return shortcut_path
 
 
 def find_old_shortcuts() -> "list[Path]":

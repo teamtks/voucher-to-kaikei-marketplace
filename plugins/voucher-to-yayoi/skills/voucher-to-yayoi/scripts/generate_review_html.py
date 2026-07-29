@@ -19,15 +19,28 @@
 としてダウンロードできるので、そのファイルをそのまま generate_yayoi.py の
 入力にすればよい。サーバー等は使わず、ブラウザ内の操作だけで完結する。
 
+出力したHTMLは案件フォルダの中に置かれるため、そのままでは開くのにフォルダを
+辿る必要がある。そこで既定では、デスクトップに「仕訳チェック資料」という
+ショートカットも作成する(常に最後に生成したチェック資料を指す。過去の分は
+案件フォルダから開けるので、アイコンが増え続けないように1つを使い回す)。
+不要な場合は --no-desktop-shortcut を付ける。
+
 使い方:
-    python generate_review_html.py <入力JSON> <出力先.html>
+    python generate_review_html.py <入力JSON> <出力先.html> [--no-desktop-shortcut]
 """
+import argparse
 import base64
 import html
 import json
 import mimetypes
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from lib.desktop_shortcut import ShortcutError, create_shortcut, desktop_dir
+
+SHORTCUT_NAME = "仕訳チェック資料.lnk"
 
 
 def _guess_mime(path: str) -> str:
@@ -504,13 +517,33 @@ def build_html(data: dict, suggested_filename: str) -> str:
 </html>"""
 
 
-def main():
-    if len(sys.argv) != 3:
-        print("使い方: python generate_review_html.py <入力JSON> <出力先.html>")
-        raise SystemExit(1)
+def create_review_shortcut(html_path: Path) -> Path:
+    """デスクトップに、チェック資料HTMLを開くショートカットを作成する。"""
+    icon_path = Path(__file__).resolve().parent / "review_icon.ico"
+    return create_shortcut(
+        desktop_dir() / SHORTCUT_NAME,
+        html_path.resolve(),
+        working_directory=html_path.resolve().parent,
+        icon_path=icon_path,
+        description="仕訳チェック資料(直前に作成した仕訳の確認・訂正用)",
+    )
 
-    input_path = Path(sys.argv[1])
-    output_path = Path(sys.argv[2])
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="仕訳データと証憑画像から、確認・訂正できるチェック資料(HTML)を作る"
+    )
+    parser.add_argument("input", help="入力JSON")
+    parser.add_argument("output", help="出力先.html")
+    parser.add_argument(
+        "--no-desktop-shortcut",
+        action="store_true",
+        help="デスクトップに「仕訳チェック資料」のショートカットを作らない",
+    )
+    args = parser.parse_args()
+
+    input_path = Path(args.input)
+    output_path = Path(args.output)
 
     data = json.loads(input_path.read_text(encoding="utf-8"))
     if not data.get("legs"):
@@ -522,6 +555,17 @@ def main():
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(html_content, encoding="utf-8")
     print(f"チェック資料を出力しました: {output_path}")
+
+    if not args.no_desktop_shortcut:
+        try:
+            shortcut_path = create_review_shortcut(output_path)
+            print(f"デスクトップに「{shortcut_path.stem}」のアイコンを作成しました(ダブルクリックで開けます)。")
+        except ShortcutError as e:
+            # ショートカットはあくまで利便性のためのものなので、失敗しても
+            # チェック資料自体は使える。処理を止めずに知らせるだけにする。
+            print(f"※ デスクトップのアイコン作成はできませんでした({e})。")
+            print(f"　 チェック資料は {output_path} から直接開けます。")
+
     print("ブラウザで開くと、その場で仕訳内容を訂正できます(勘定科目・金額・摘要など)。")
     print(f'訂正後は「変更をJSONとして保存」ボタンを押すと "{suggested_filename}" としてダウンロードされます。')
 
