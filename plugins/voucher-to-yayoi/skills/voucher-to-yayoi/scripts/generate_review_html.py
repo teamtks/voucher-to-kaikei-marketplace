@@ -126,10 +126,45 @@ def build_html(data: dict, suggested_filename: str) -> str:
   }}
   #imagePane {{
     flex: 1 1 50%; background: #2b2b2b; display: flex;
-    align-items: center; justify-content: center; padding: 16px; overflow: auto;
+    align-items: center; justify-content: center; position: relative; overflow: hidden;
   }}
-  #imagePane img {{ max-width: 100%; max-height: 100%; box-shadow: 0 4px 16px rgba(0,0,0,.4); background: #fff; }}
+  #imageStage {{
+    width: 100%; height: 100%; padding: 16px;
+    display: flex; align-items: center; justify-content: center;
+    transform-origin: center center; will-change: transform;
+  }}
+  #imagePane img {{
+    max-width: 100%; max-height: 100%; box-shadow: 0 4px 16px rgba(0,0,0,.4);
+    background: #fff; user-select: none; -webkit-user-drag: none;
+  }}
   #imagePane .placeholder {{ color: #aaa; font-size: 15px; }}
+  /* 拡大中はドラッグで動かせることを、カーソルの形で示す */
+  #imagePane.zoomed #imageStage {{ cursor: grab; }}
+  #imagePane.panning #imageStage {{ cursor: grabbing; }}
+  #zoomBar {{
+    position: absolute; top: 12px; right: 12px; display: none; gap: 6px; align-items: center;
+    background: rgba(255,255,255,.94); border-radius: 8px; padding: 6px;
+    box-shadow: 0 2px 10px rgba(0,0,0,.35); z-index: 5;
+  }}
+  #zoomBar.visible {{ display: flex; }}
+  #zoomBar button {{
+    appearance: none; -webkit-appearance: none; border: 1px solid #ccc; background: #fff;
+    color: #333; border-radius: 5px; width: 32px; height: 30px; cursor: pointer;
+    font-size: 17px; line-height: 1; padding: 0;
+  }}
+  #zoomBar button.wide {{ width: auto; padding: 0 10px; font-size: 12px; }}
+  #zoomBar button:hover {{ background: #f0f0f0; }}
+  #zoomBar button:disabled {{ color: #bbb; cursor: default; background: #f7f7f7; }}
+  #zoomLabel {{
+    font-size: 12px; color: #444; min-width: 46px; text-align: center;
+    font-variant-numeric: tabular-nums;
+  }}
+  #zoomHint {{
+    position: absolute; bottom: 10px; left: 12px; display: none;
+    color: #ddd; font-size: 11px; background: rgba(0,0,0,.4);
+    padding: 4px 8px; border-radius: 5px; pointer-events: none;
+  }}
+  #zoomHint.visible {{ display: block; }}
   #listPane {{
     flex: 1 1 50%; overflow-y: auto; padding: 12px; border-left: 1px solid #ddd;
   }}
@@ -210,7 +245,16 @@ def build_html(data: dict, suggested_filename: str) -> str:
 </style>
 </head>
 <body>
-  <div id="imagePane"><div class="placeholder">左の一覧から仕訳を選んでください</div></div>
+  <div id="imagePane">
+    <div id="imageStage"><div class="placeholder">左の一覧から仕訳を選んでください</div></div>
+    <div id="zoomBar">
+      <button id="zoomOutBtn" type="button" title="縮小">−</button>
+      <span id="zoomLabel">100%</span>
+      <button id="zoomInBtn" type="button" title="拡大">＋</button>
+      <button id="zoomResetBtn" class="wide" type="button" title="全体を表示する">全体</button>
+    </div>
+    <div id="zoomHint">マウスホイールで拡大・縮小／拡大中はドラッグで移動／ダブルクリックで切替</div>
+  </div>
   <div id="listPane">
     {save_hint}
     <div id="toolbar">
@@ -361,20 +405,131 @@ def build_html(data: dict, suggested_filename: str) -> str:
     }}
   }}
 
+  // ===== 証憑画像の拡大・縮小 =====
+  // 倍率1.0は「ペインに収まる大きさ(全体表示)」を意味する。画像の実寸ではなく
+  // 表示サイズを基準にしているので、画像の解像度によらず同じ操作感になる。
+  const ZOOM_MIN = 1, ZOOM_MAX = 8, ZOOM_STEP = 1.25;
+  let zoomScale = 1, zoomX = 0, zoomY = 0;
+  let panning = false, panStartX = 0, panStartY = 0;
+
+  function stageImage() {{
+    return document.querySelector("#imageStage img");
+  }}
+
+  function clampPan() {{
+    const pane = document.getElementById("imagePane");
+    const img = stageImage();
+    if (!img) {{ zoomX = 0; zoomY = 0; return; }}
+    // 画像が画面外へ飛んでいかないよう、はみ出した分だけ動かせるようにする
+    const maxX = Math.max(0, (img.clientWidth * zoomScale - pane.clientWidth) / 2);
+    const maxY = Math.max(0, (img.clientHeight * zoomScale - pane.clientHeight) / 2);
+    zoomX = Math.min(maxX, Math.max(-maxX, zoomX));
+    zoomY = Math.min(maxY, Math.max(-maxY, zoomY));
+  }}
+
+  function applyZoom() {{
+    const pane = document.getElementById("imagePane");
+    clampPan();
+    document.getElementById("imageStage").style.transform =
+      "translate(" + zoomX + "px," + zoomY + "px) scale(" + zoomScale + ")";
+    document.getElementById("zoomLabel").textContent = Math.round(zoomScale * 100) + "%";
+    pane.classList.toggle("zoomed", zoomScale > 1);
+    document.getElementById("zoomInBtn").disabled = zoomScale >= ZOOM_MAX - 1e-9;
+    document.getElementById("zoomOutBtn").disabled = zoomScale <= ZOOM_MIN + 1e-9;
+  }}
+
+  function setZoom(next, anchorClientX, anchorClientY) {{
+    const clamped = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, next));
+    if (Math.abs(clamped - zoomScale) < 1e-9) return;
+    if (typeof anchorClientX === "number") {{
+      // カーソルの下にある位置が動かないように平行移動量を調整する
+      const rect = document.getElementById("imagePane").getBoundingClientRect();
+      const cx = anchorClientX - rect.left - rect.width / 2;
+      const cy = anchorClientY - rect.top - rect.height / 2;
+      zoomX = cx - (cx - zoomX) * clamped / zoomScale;
+      zoomY = cy - (cy - zoomY) * clamped / zoomScale;
+    }}
+    zoomScale = clamped;
+    if (zoomScale === ZOOM_MIN) {{ zoomX = 0; zoomY = 0; }}
+    applyZoom();
+  }}
+
+  function showWholeImage() {{
+    zoomScale = ZOOM_MIN; zoomX = 0; zoomY = 0;
+    applyZoom();
+  }}
+
+  function setZoomControlsVisible(visible) {{
+    document.getElementById("zoomBar").classList.toggle("visible", visible);
+    document.getElementById("zoomHint").classList.toggle("visible", visible);
+  }}
+
+  function initZoomControls() {{
+    const pane = document.getElementById("imagePane");
+    document.getElementById("zoomInBtn").addEventListener("click", () => setZoom(zoomScale * ZOOM_STEP));
+    document.getElementById("zoomOutBtn").addEventListener("click", () => setZoom(zoomScale / ZOOM_STEP));
+    document.getElementById("zoomResetBtn").addEventListener("click", showWholeImage);
+
+    pane.addEventListener("wheel", e => {{
+      if (!stageImage()) return;
+      e.preventDefault();  // ページ全体のスクロールではなく拡大縮小にする
+      setZoom(zoomScale * (e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP), e.clientX, e.clientY);
+    }}, {{ passive: false }});
+
+    pane.addEventListener("dblclick", e => {{
+      if (!stageImage()) return;
+      if (zoomScale > ZOOM_MIN) showWholeImage();
+      else setZoom(2.5, e.clientX, e.clientY);
+    }});
+
+    pane.addEventListener("pointerdown", e => {{
+      if (zoomScale <= ZOOM_MIN || !stageImage()) return;
+      panning = true;
+      panStartX = e.clientX - zoomX;
+      panStartY = e.clientY - zoomY;
+      pane.classList.add("panning");
+      pane.setPointerCapture(e.pointerId);
+    }});
+    pane.addEventListener("pointermove", e => {{
+      if (!panning) return;
+      zoomX = e.clientX - panStartX;
+      zoomY = e.clientY - panStartY;
+      applyZoom();
+    }});
+    const endPan = () => {{
+      if (!panning) return;
+      panning = false;
+      pane.classList.remove("panning");
+    }};
+    pane.addEventListener("pointerup", endPan);
+    pane.addEventListener("pointercancel", endPan);
+    // ウィンドウ幅が変わると収まる大きさも変わるため、はみ出し量を再計算する
+    window.addEventListener("resize", applyZoom);
+  }}
+
+  function showPlaceholder(message) {{
+    document.getElementById("imageStage").innerHTML =
+      '<div class="placeholder">' + message + '</div>';
+    setZoomControlsVisible(false);
+    showWholeImage();
+  }}
+
   function selectVoucher(voucherId) {{
     currentSelectedVoucherId = voucherId;
     document.querySelectorAll(".voucher-card.selected").forEach(c => c.classList.remove("selected"));
     const card = document.querySelector('.voucher-card[data-voucher-id="' + CSS.escape(voucherId) + '"]');
     if (card) card.classList.add("selected");
     const leg = VOUCHER_DATA.legs.find(l => l.voucher_id === voucherId);
-    const pane = document.getElementById("imagePane");
     const uri = leg && leg.source_image ? IMAGES[leg.source_image] : null;
     if (uri) {{
-      pane.innerHTML = '<img src="' + uri + '" alt="証憑画像">';
+      document.getElementById("imageStage").innerHTML = '<img src="' + uri + '" alt="証憑画像">';
+      setZoomControlsVisible(true);
+      // 別の証憑に切り替えたら、まず全体が見える状態から始める
+      showWholeImage();
     }} else if (leg && leg.source_image) {{
-      pane.innerHTML = '<div class="placeholder">この証憑画像ファイルが見つかりません</div>';
+      showPlaceholder("この証憑画像ファイルが見つかりません");
     }} else {{
-      pane.innerHTML = '<div class="placeholder">この仕訳には証憑画像が登録されていません</div>';
+      showPlaceholder("この仕訳には証憑画像が登録されていません");
     }}
   }}
 
@@ -484,7 +639,7 @@ def build_html(data: dict, suggested_filename: str) -> str:
     dirty = false;
     document.getElementById("dirtyBanner").style.display = "none";
     document.getElementById("savedNote").style.display = "none";
-    document.getElementById("imagePane").innerHTML = '<div class="placeholder">左の一覧から仕訳を選んでください</div>';
+    showPlaceholder("左の一覧から仕訳を選んでください");
     renderAll();
   }}
 
@@ -510,6 +665,7 @@ def build_html(data: dict, suggested_filename: str) -> str:
     if (card) selectVoucher(card.dataset.voucherId);
   }});
 
+  initZoomControls();
   VOUCHER_DATA = cloneInitial();
   renderAll();
 </script>
