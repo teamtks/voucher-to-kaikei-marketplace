@@ -19,15 +19,21 @@
   ]
 }
 
+出力先を省略するとデスクトップに「仕訳インポート_YYYYMMDD.txt」として出力する
+(案件フォルダを辿らずにすぐ取り込めるようにするため)。案件ごとに別の場所へ
+出したい場合は、案件フォルダのCLAUDE.mdにその指示を書き、出力先を明示して渡す。
+
 使い方:
-    python generate_yayoi.py <入力JSON> <出力先.txt>
+    python generate_yayoi.py <入力JSON> [出力先]
 """
+import argparse
 import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from lib.output_path import OutputPathError, resolve_output_path
 from lib.validators import ValidationError, validate_output_rows
 from lib.voucher_builder import VoucherBuildError, build_all_vouchers
 from lib.voucher_input import load_legs
@@ -35,12 +41,18 @@ from lib.yayoi_writer import write_yayoi_file
 
 
 def main():
-    if len(sys.argv) != 3:
-        print("使い方: python generate_yayoi.py <入力JSON> <出力先.txt>")
-        raise SystemExit(1)
+    parser = argparse.ArgumentParser(
+        description="確定した仕訳データ(JSON)から弥生会計インポート形式のファイルを作る"
+    )
+    parser.add_argument("input", help="入力JSON")
+    parser.add_argument(
+        "output",
+        nargs="?",
+        help="出力先(ファイルまたはフォルダ)。省略時はデスクトップ",
+    )
+    args = parser.parse_args()
 
-    input_path = Path(sys.argv[1])
-    output_path = Path(sys.argv[2])
+    input_path = Path(args.input)
 
     data = json.loads(input_path.read_text(encoding="utf-8"))
     legs = load_legs(data)
@@ -61,6 +73,12 @@ def main():
         print("検証エラーのため出力を中止しました:")
         for err in errors:
             print(f"  - {err}")
+        raise SystemExit(1)
+
+    try:
+        output_path = resolve_output_path(args.output, ".txt")
+    except OutputPathError as e:
+        print(f"出力先を決められませんでした: {e}")
         raise SystemExit(1)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

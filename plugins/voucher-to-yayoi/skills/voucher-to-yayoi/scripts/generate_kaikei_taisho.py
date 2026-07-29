@@ -11,9 +11,14 @@
 - 補助科目は非対応(指定されているとエラーになる)。
 - 対応している税区分は lib/kaikei_taisho_writer.py の _TAX_RULES を参照。
 
+出力先を省略するとデスクトップに「仕訳インポート_YYYYMMDD.csv」として出力する
+(案件フォルダを辿らずにすぐ取り込めるようにするため)。案件ごとに別の場所へ
+出したい場合は、案件フォルダのCLAUDE.mdにその指示を書き、出力先を明示して渡す。
+
 使い方:
-    python generate_kaikei_taisho.py <入力JSON> <科目コード表.json> <出力先.csv>
+    python generate_kaikei_taisho.py <入力JSON> <科目コード表.json> [出力先]
 """
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -22,18 +27,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from lib.kaikei_taisho_accounts import AccountCodeError, load_account_code_table
 from lib.kaikei_taisho_writer import KaikeiTaishoBuildError, write_kaikei_taisho_file
+from lib.output_path import OutputPathError, resolve_output_path
 from lib.voucher_builder import group_legs_by_voucher
 from lib.voucher_input import load_legs
 
 
 def main():
-    if len(sys.argv) != 4:
-        print("使い方: python generate_kaikei_taisho.py <入力JSON> <科目コード表.json> <出力先.csv>")
-        raise SystemExit(1)
+    parser = argparse.ArgumentParser(
+        description="確定した仕訳データ(JSON)から会計大将CSV取込形式のファイルを作る"
+    )
+    parser.add_argument("input", help="入力JSON")
+    parser.add_argument("accounts", help="科目コード表.json")
+    parser.add_argument(
+        "output",
+        nargs="?",
+        help="出力先(ファイルまたはフォルダ)。省略時はデスクトップ",
+    )
+    args = parser.parse_args()
 
-    input_path = Path(sys.argv[1])
-    accounts_path = Path(sys.argv[2])
-    output_path = Path(sys.argv[3])
+    input_path = Path(args.input)
+    accounts_path = Path(args.accounts)
 
     data = json.loads(input_path.read_text(encoding="utf-8"))
     legs = load_legs(data)
@@ -57,6 +70,13 @@ def main():
             print(f"  - {err}")
         raise SystemExit(1)
 
+    try:
+        output_path = resolve_output_path(args.output, ".csv")
+    except OutputPathError as e:
+        print(f"出力先を決められませんでした: {e}")
+        raise SystemExit(1)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         write_kaikei_taisho_file(legs, accounts, str(output_path))
     except (KaikeiTaishoBuildError, AccountCodeError) as e:
