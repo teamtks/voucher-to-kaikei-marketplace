@@ -28,7 +28,12 @@ Read等で開くこと。元のPDF/画像ファイルを直接Claudeに読み込
 使い方:
     python mask_addressee.py <入力PDF/JPG/PNG> <出力先フォルダ> [--own-invoice-no T1234567890123 ...]
 
-出力: 入力ファイル名に "_masked_pageN.png" を付けたファイルを出力先フォルダに保存する。
+出力:
+- "<入力ファイル名>_masked_pageN.png": 黒塗り済み画像。**Claudeが読み取るのはこれだけ。**
+- "<入力ファイル名>_original_pageN.png": 黒塗り前のページ画像(入力がPDFの場合のみ)。
+  手順5のチェック資料(利用者自身のブラウザでしか開かないHTML)に埋め込んで、
+  利用者が証憑の全体を見比べて確認するためのもの。Claudeはこの画像を読み込まない。
+  入力がJPG/PNGの場合は元ファイルそのものが使えるため出力しない。
 """
 import argparse
 import re
@@ -122,8 +127,12 @@ def _is_sensitive_line(text: str, own_invoice_nos: "frozenset[str]" = frozenset(
     return False
 
 
+def _is_pdf(path: Path) -> bool:
+    return path.suffix.lower() == ".pdf"
+
+
 def _load_pages(path: Path) -> list[Image.Image]:
-    if path.suffix.lower() == ".pdf":
+    if _is_pdf(path):
         return rasterize_pdf(str(path), dpi=200)
     return [Image.open(path).convert("RGB")]
 
@@ -183,8 +192,16 @@ def main():
 
     ocr = JapaneseOCR()
     pages = _load_pages(input_path)
+    # PDFはページ画像がこの場でしか手に入らないため、チェック資料用に黒塗り前の
+    # 画像も保存する。JPG/PNGは元ファイルをそのまま使えるので保存しない。
+    save_originals = _is_pdf(input_path)
 
     for i, page in enumerate(pages, start=1):
+        if save_originals:
+            original_path = output_dir / f"{input_path.stem}_original_page{i}.png"
+            page.save(original_path)
+            print(f"{original_path}  (黒塗り前・チェック資料用。Claudeは読み込まない)")
+
         masked, count = mask_addressee_lines(page, ocr, own_invoice_nos)
         out_path = output_dir / f"{input_path.stem}_masked_page{i}.png"
         masked.save(out_path)
