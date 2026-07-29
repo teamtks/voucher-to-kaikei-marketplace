@@ -9,9 +9,9 @@
 {
   "fiscal_start_month": 2,
   "accounts": {
-    "旅費交通費": {"code": "636"},
-    "現金":       {"code": "111", "fund_type_code": "2", "fund_ledger_id": "18"},
-    "代表者借入金": {"code": "314"}
+    "旅費交通費": {"code": "636", "cash_flow_type": "2", "cash_flow_code": "18"},
+    "現金":       {"code": "111"},
+    "代表者借入金": {"code": "314", "cash_flow_type": "2", "cash_flow_code": "40"}
   }
 }
 
@@ -20,12 +20,21 @@
   次の3か月=11,12,13 → ...)を持つため、期首月が分からないと計算できない。
   勘定科目一覧表や総勘定元帳など、その会社の実際の会計期間から確認すること
   (安易に2月始まりだと仮定しないこと)。
-- "fund_type_code" / "fund_ledger_id": 現金・預金などの「資金科目」だけに
-  設定する。会計大将は資金科目が絡む行に、通常の勘定科目コードとは別に
-  資金管理用の内部コードを持たせている(実データ解析で確認済み)。この値は
-  科目コードから機械的に導出できず、会社ごとの実データ(既存の会計大将CSV
-  エクスポート等)から実例を探して確認するしかない。資金科目でない科目には
-  設定不要(省略時は共に"0"として扱われる)。
+- "cash_flow_type" / "cash_flow_code": 資金繰り(資金収支)表での分類。
+  会計大将のエクスポートCSVでは「資金繰コード」「資金繰名」として出力される
+  項目にあたり、実データ解析では **現金・預金の側ではなく、その相手科目
+  (費用・収益・債権債務などの「理由」側の科目)に紐づいている** ことが
+  確認できている(例: 手数料を現金/A銀行/B銀行のどれで払っても常に同じ
+  コードになる)。cash_flow_type は 1=入金 / 2=出金。cash_flow_code は
+  資金繰り区分の番号(例: 18=販売管理費、15=人件費、3=売掛金入金)で、
+  科目コードから機械的に導出できないため、会社ごとの実データ(既存の
+  会計大将CSVエクスポート等)から実例を探して確認する必要がある。
+  設定しなかった科目は共に"0"(資金繰り対象外)として扱われる。
+
+なお、旧バージョンではこの2項目を "fund_type_code" / "fund_ledger_id" と呼び、
+現金・預金側の科目に設定する想定になっていた(実データの解析が不十分だった
+ための誤り)。互換のため旧名でも読み込めるようにしてあるが、値は上記の
+「相手科目側に付ける」考え方で設定し直すこと。
 """
 import json
 from dataclasses import dataclass
@@ -41,8 +50,12 @@ class AccountCodeError(Exception):
 @dataclass
 class AccountCode:
     code: str
-    fund_type_code: str = "0"
-    fund_ledger_id: str = "0"
+    cash_flow_type: str = "0"
+    cash_flow_code: str = "0"
+
+    @property
+    def has_cash_flow(self) -> bool:
+        return self.cash_flow_type != "0" or self.cash_flow_code != "0"
 
 
 @dataclass
@@ -81,8 +94,13 @@ def load_account_code_table(path: str) -> AccountCodeTable:
             continue
         accounts[name] = AccountCode(
             code=str(entry["code"]),
-            fund_type_code=str(entry.get("fund_type_code", "0")),
-            fund_ledger_id=str(entry.get("fund_ledger_id", "0")),
+            # 旧名(fund_type_code / fund_ledger_id)も読めるようにしておく。
+            cash_flow_type=str(
+                entry.get("cash_flow_type", entry.get("fund_type_code", "0"))
+            ),
+            cash_flow_code=str(
+                entry.get("cash_flow_code", entry.get("fund_ledger_id", "0"))
+            ),
         )
 
     if errors:

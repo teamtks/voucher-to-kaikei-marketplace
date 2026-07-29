@@ -8,7 +8,8 @@
 
 現時点の制限(SKILL.md参照):
 - 1伝票1明細の単純仕訳のみ対応(複合仕訳は非対応)。
-- 税区分は「課対仕入込10%適格」のみ対応。
+- 補助科目は非対応(指定されているとエラーになる)。
+- 対応している税区分は lib/kaikei_taisho_writer.py の _TAX_RULES を参照。
 
 使い方:
     python generate_kaikei_taisho.py <入力JSON> <科目コード表.json> <出力先.csv>
