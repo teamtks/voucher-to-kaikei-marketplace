@@ -73,9 +73,61 @@ def _guess_project_folder(legs: list) -> "str | None":
     return None
 
 
+# 弥生会計の税区分名は「課税区分＋税入力区分＋税率(＋インボイス区分)」の組み合わせで
+# できている(公式資料「課税方式別税区分・税計算区分一覧」で確認)。本アプリは金額を
+# 税込で扱うため、税入力区分は常に「込」。
+#
+# インボイス区分は課税仕入にのみ付く。「適格」以外は免税事業者等からの仕入に対する
+# 経過措置で、控除できる割合が期間によって変わる(区分80%→区分50%→控不)。
+_INVOICE_OPTIONS = [
+    {"value": "適格", "label": "適格(全額控除)"},
+    {"value": "区分80%", "label": "区分80%(免税事業者等・経過措置)"},
+    {"value": "区分50%", "label": "区分50%(免税事業者等・経過措置)"},
+    {"value": "控不", "label": "控不(控除不可)"},
+]
+
+_BUSINESS_TYPE_KANJI = {
+    "1": "一", "2": "二", "3": "三", "4": "四", "5": "五", "6": "六",
+    "一": "一", "二": "二", "三": "三", "四": "四", "五": "五", "六": "六",
+}
+
+
+def _sales_business_type(data: dict) -> str:
+    """簡易課税の事業区分(第○種事業)。本則課税なら空文字。
+
+    簡易課税の顧問先では、売上側の税区分名に事業区分が入る
+    (実データで「課税売上込六10%」を確認済み)。顧問先ごとに固定なので、
+    入力JSONの `sales_business_type` で受け取る。
+    """
+    raw = data.get("sales_business_type")
+    if raw is None:
+        return ""
+    return _BUSINESS_TYPE_KANJI.get(str(raw).strip(), "")
+
+
+def _tax_options(business_type: str) -> list:
+    """税区分の選択肢。借方・貸方で同じ一覧を使う。
+
+    借方＝仕入、貸方＝売上とは限らない(売上返品や値引では借方に売上科目が来る)
+    ため、側で選択肢を分けず、選んだ税区分自体でインボイス欄の有無を決める。
+    """
+    return [
+        {"value": "課対仕入込10%", "label": "課税仕入 10%", "invoice": True},
+        {"value": "課対仕入込軽減8%", "label": "課税仕入 軽減8%", "invoice": True},
+        {"value": "課対仕入込8%", "label": "課税仕入 8%(旧税率)", "invoice": True},
+        {"value": "非課仕入", "label": "非課税仕入", "invoice": False},
+        {"value": f"課税売上込{business_type}10%", "label": "課税売上 10%", "invoice": False},
+        {"value": f"課税売上込{business_type}軽減8%", "label": "課税売上 軽減8%", "invoice": False},
+        {"value": f"課税売上込{business_type}8%", "label": "課税売上 8%(旧税率)", "invoice": False},
+        {"value": "非課売上", "label": "非課税売上", "invoice": False},
+        {"value": "対象外", "label": "対象外(不課税)", "invoice": False},
+    ]
+
+
 def build_html(data: dict, suggested_filename: str) -> str:
     legs = data.get("legs", [])
     project_folder = _guess_project_folder(legs)
+    business_type = _sales_business_type(data)
 
     # 画像は同じファイルが複数の伝票から参照されることがあるため、重複排除して埋め込む
     image_uris: "dict[str, str]" = {}
@@ -108,9 +160,24 @@ def build_html(data: dict, suggested_filename: str) -> str:
           <code>{html.escape(project_folder)}</code>
         </div>"""
 
+    # 税区分の選択肢をどちらの課税方式で作ったかを明示する。簡易課税の顧問先で
+    # 事業区分の指定を忘れると、売上の税区分が本則課税の名称になってしまうため、
+    # 人が確認する画面で気づけるようにしておく。
+    if business_type:
+        tax_mode_label = f"簡易課税(第{business_type}種事業)"
+    else:
+        tax_mode_label = "本則課税(事業区分なし)"
+    tax_mode_note = f"""
+        <div id="taxModeNote">
+          税区分の選択肢は<strong>{html.escape(tax_mode_label)}</strong>用で作成しています。
+          この案件の課税方式と違う場合は、この資料を使わずにご連絡ください。
+        </div>"""
+
     initial_data_json = json.dumps(data, ensure_ascii=False)
     images_json = json.dumps(image_uris, ensure_ascii=False)
     suggested_filename_json = json.dumps(suggested_filename, ensure_ascii=False)
+    tax_options_json = json.dumps(_tax_options(business_type), ensure_ascii=False)
+    invoice_options_json = json.dumps(_INVOICE_OPTIONS, ensure_ascii=False)
 
     return f"""<!doctype html>
 <html lang="ja">
@@ -174,6 +241,11 @@ def build_html(data: dict, suggested_filename: str) -> str:
     padding: 8px 12px; margin: 0 8px 10px; font-size: 12px; color: #2b4a7a; line-height: 1.6;
   }}
   #saveHint code {{ font-size: 12px; word-break: break-all; }}
+  #taxModeNote {{
+    background: #fff8e6; border: 1px solid #f0dfae; border-radius: 6px;
+    padding: 8px 12px; margin: 0 8px 10px; font-size: 12px; color: #6b5320; line-height: 1.6;
+  }}
+  #taxModeNote strong {{ color: #4a3a12; }}
   #toolbar {{ display: flex; gap: 8px; margin: 4px 8px 10px; }}
   #toolbar button {{
     appearance: none; -webkit-appearance: none;
@@ -223,7 +295,13 @@ def build_html(data: dict, suggested_filename: str) -> str:
   .f-account {{ width: 108px; }}
   .f-sub {{ width: 66px; }}
   .f-dept {{ width: 60px; }}
-  .f-tax {{ width: 108px; }}
+  .f-tax {{ width: 150px; }}
+  .f-invoice {{ width: 132px; }}
+  .f-tax, .f-invoice {{
+    font-size: 13px; padding: 5px 4px; border: 1px solid #ccc; border-radius: 4px;
+    background: #fff; color: #333;
+  }}
+  .f-invoice:disabled {{ background: #f2f2f2; color: #aaa; }}
   .f-amount {{
     width: 140px; text-align: right; font-variant-numeric: tabular-nums;
     font-size: 15px; font-weight: bold; padding: 6px 8px;
@@ -256,6 +334,7 @@ def build_html(data: dict, suggested_filename: str) -> str:
     <div id="zoomHint">マウスホイールで拡大・縮小／拡大中はドラッグで移動／ダブルクリックで切替</div>
   </div>
   <div id="listPane">
+    {tax_mode_note}
     {save_hint}
     <div id="toolbar">
       <button id="saveBtn" type="button">変更をJSONとして保存(ダウンロード)</button>
@@ -271,6 +350,8 @@ def build_html(data: dict, suggested_filename: str) -> str:
   const INITIAL_DATA = {initial_data_json};
   const IMAGES = {images_json};
   const SUGGESTED_FILENAME = {suggested_filename_json};
+  const TAX_OPTIONS = {tax_options_json};
+  const INVOICE_OPTIONS = {invoice_options_json};
 
   let VOUCHER_DATA = null;
   let legUidCounter = 0;
@@ -318,6 +399,45 @@ def build_html(data: dict, suggested_filename: str) -> str:
     document.getElementById("dirtyBanner").style.display = "block";
   }}
 
+  // 税区分の文字列を「基本区分」と「インボイス区分」に分解する。
+  // どの選択肢にも当てはまらない値(想定外の税区分)は失わないよう、そのまま
+  // 「その他」の選択肢として保持する。
+  function splitTaxCategory(value) {{
+    const raw = value || "";
+    for (const opt of TAX_OPTIONS) {{
+      if (raw === opt.value) return {{ base: opt.value, invoice: "", other: "" }};
+      if (opt.invoice) {{
+        for (const inv of INVOICE_OPTIONS) {{
+          if (raw === opt.value + inv.value) return {{ base: opt.value, invoice: inv.value, other: "" }};
+        }}
+      }}
+    }}
+    return {{ base: "", invoice: "", other: raw }};
+  }}
+
+  function taxOptionByValue(value) {{
+    return TAX_OPTIONS.find(o => o.value === value) || null;
+  }}
+
+  function taxSelectHTML(leg, side) {{
+    const parts = splitTaxCategory(leg[side].tax_category);
+    const opts = TAX_OPTIONS.map(o =>
+      `<option value="${{esc(o.value)}}"${{o.value === parts.base ? " selected" : ""}}>${{esc(o.label)}}</option>`
+    ).join("");
+    // 未設定・想定外の値はそのまま選択肢として残す(黙って書き換えないため)
+    const otherOpt = parts.base
+      ? ""
+      : `<option value="" selected>${{parts.other ? esc(parts.other) + "(そのまま)" : "(未設定)"}}</option>`;
+    const invoiceApplies = parts.base ? !!(taxOptionByValue(parts.base) || {{}}).invoice : false;
+    const invOpts = INVOICE_OPTIONS.map(o =>
+      `<option value="${{esc(o.value)}}"${{o.value === parts.invoice ? " selected" : ""}}>${{esc(o.label)}}</option>`
+    ).join("");
+    const invBlank = `<option value=""${{parts.invoice ? "" : " selected"}}>${{invoiceApplies ? "(未選択)" : "—"}}</option>`;
+    return `
+          <select class="f-tax" data-uid="${{leg._uid}}" data-side="${{side}}" title="税区分">${{otherOpt}}${{opts}}</select>
+          <select class="f-invoice" data-uid="${{leg._uid}}" data-side="${{side}}" title="インボイス区分(課税仕入のみ)"${{invoiceApplies ? "" : " disabled"}}>${{invBlank}}${{invOpts}}</select>`;
+  }}
+
   function legBlockHTML(leg) {{
     return `
       <div class="leg-block">
@@ -325,15 +445,13 @@ def build_html(data: dict, suggested_filename: str) -> str:
           <span class="side-tag debit">借方</span>
           <input class="f-account" data-uid="${{leg._uid}}" data-field="debit.account" value="${{esc(leg.debit.account)}}" placeholder="勘定科目">
           <input class="f-sub" data-uid="${{leg._uid}}" data-field="debit.sub_account" value="${{esc(leg.debit.sub_account)}}" placeholder="補助科目">
-          <input class="f-dept" data-uid="${{leg._uid}}" data-field="debit.department" value="${{esc(leg.debit.department)}}" placeholder="部門">
-          <input class="f-tax" data-uid="${{leg._uid}}" data-field="debit.tax_category" value="${{esc(leg.debit.tax_category)}}" placeholder="税区分">
+          <input class="f-dept" data-uid="${{leg._uid}}" data-field="debit.department" value="${{esc(leg.debit.department)}}" placeholder="部門">${{taxSelectHTML(leg, "debit")}}
         </div>
         <div class="leg-fields-row">
           <span class="side-tag credit">貸方</span>
           <input class="f-account" data-uid="${{leg._uid}}" data-field="credit.account" value="${{esc(leg.credit.account)}}" placeholder="勘定科目">
           <input class="f-sub" data-uid="${{leg._uid}}" data-field="credit.sub_account" value="${{esc(leg.credit.sub_account)}}" placeholder="補助科目">
-          <input class="f-dept" data-uid="${{leg._uid}}" data-field="credit.department" value="${{esc(leg.credit.department)}}" placeholder="部門">
-          <input class="f-tax" data-uid="${{leg._uid}}" data-field="credit.tax_category" value="${{esc(leg.credit.tax_category)}}" placeholder="税区分">
+          <input class="f-dept" data-uid="${{leg._uid}}" data-field="credit.department" value="${{esc(leg.credit.department)}}" placeholder="部門">${{taxSelectHTML(leg, "credit")}}
         </div>
         <div class="leg-fields-row">
           <input class="f-amount" type="text" inputmode="numeric" data-uid="${{leg._uid}}" data-field="__amount" value="${{fmtAmount(leg.debit.amount)}}" placeholder="金額">
@@ -572,8 +690,35 @@ def build_html(data: dict, suggested_filename: str) -> str:
     renderAll();
   }}
 
+  // 税区分の2つのドロップダウン(基本区分・インボイス区分)から、弥生の税区分名を
+  // 組み立て直す。基本区分が課税仕入でなくなったら、インボイス区分は外して欄も
+  // 選択不可にする。
+  function handleTaxSelectEvent(t) {{
+    const leg = findLegByUid(t.dataset.uid);
+    if (!leg) return;
+    const side = t.dataset.side;
+    const block = t.closest(".leg-block");
+    const baseSel = block.querySelector('.f-tax[data-side="' + side + '"]');
+    const invSel = block.querySelector('.f-invoice[data-side="' + side + '"]');
+    const base = baseSel.value;
+    const opt = taxOptionByValue(base);
+    const invoiceApplies = !!(opt && opt.invoice);
+
+    invSel.disabled = !invoiceApplies;
+    if (!invoiceApplies) invSel.value = "";
+    invSel.querySelector('option[value=""]').textContent = invoiceApplies ? "(未選択)" : "—";
+
+    leg[side].tax_category = base ? base + (invoiceApplies ? invSel.value : "") : "";
+    updateCardTotals(leg.voucher_id);
+    markDirty();
+  }}
+
   function handleFieldEvent(e) {{
     const t = e.target;
+    if (t.classList && (t.classList.contains("f-tax") || t.classList.contains("f-invoice"))) {{
+      handleTaxSelectEvent(t);
+      return;
+    }}
     const field = t.dataset.field;
     if (!field) return;
     if (field === "__date") {{
@@ -610,6 +755,10 @@ def build_html(data: dict, suggested_filename: str) -> str:
   function saveJSON() {{
     const out = {{
       start_denpyo_no: VOUCHER_DATA.start_denpyo_no,
+      // 簡易課税の事業区分は顧問先ごとの設定なので、保存し直しても失わないようにする
+      ...(VOUCHER_DATA.sales_business_type != null
+        ? {{ sales_business_type: VOUCHER_DATA.sales_business_type }}
+        : {{}}),
       legs: VOUCHER_DATA.legs.map(leg => {{
         const copy = Object.assign({{}}, leg);
         delete copy._uid;
