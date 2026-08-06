@@ -43,6 +43,7 @@ from datetime import date
 
 from .kaikei_taisho_accounts import AccountCode, AccountCodeTable
 from .models import LegRow
+from .validators import find_machine_dependent_chars
 
 # 税区分を持たない(消費税の対象として扱わない)ことを表す税区分名。
 NO_TAX_CATEGORY = "対象外"
@@ -255,6 +256,16 @@ def build_row(leg: LegRow, accounts: AccountCodeTable) -> str:
                 "(会計大将は補助科目も数値コードで管理しており、その対応表を"
                 "受け取る仕組みがまだありません)。補助科目を空欄にし、区別が"
                 "必要な情報は摘要欄に書いてください"
+            )
+
+    for field_name, value in (("摘要", leg.description), ("メモ", leg.memo)):
+        bad_chars = find_machine_dependent_chars(value or "")
+        if bad_chars:
+            raise KaikeiTaishoBuildError(
+                f"伝票 {leg.voucher_id}: 「{field_name}」に機種依存文字が含まれています"
+                f"({''.join(sorted(set(bad_chars)))})。環境によって文字化けする恐れが"
+                "あるため、正しい字体か確認したうえで、標準的な字体に置き換えるか"
+                "そのままで問題ないか判断してください"
             )
 
     debit_code = accounts.lookup(leg.debit.account)

@@ -12,6 +12,41 @@ from .voucher_builder import LegRow
 # 弥生会計の仕様: 摘要欄は全角32文字まで(CP932で1文字1〜2バイト換算、64バイトまで)。
 DESCRIPTION_MAX_BYTES = 64
 
+# CP932の機種依存文字(NEC選定IBM拡張文字・IBM拡張文字)の範囲。実データで「﨑」
+# (U+FA11, CP932では0xED95)が原因の不具合が実際に確認されている。この2領域は
+# 丸数字等の記号ではなく、ほぼ人名・地名専用の異体字(髙・﨑・德など)で構成されて
+# いるため、機械的に標準字体へ置き換えると実在する方の氏名表記を書き換えてしまう
+# 恐れがある。そのため自動置換はせず、検出したら生成を止めて人に確認してもらう
+# (このスキルの「読み取り内容を鵜呑みにせず人が確認する」という基本方針に沿う)。
+#
+# なお「NEC選定IBM拡張」と「IBM拡張」はCP932上、同じ文字集合を指す重複領域であり、
+# Python標準の`str.encode("cp932")`は常に前者(0xED-0xEE側)を選ぶため、実際の
+# Unicode文字列からはIBM拡張側の生バイト(0xFA-0xFC)には到達しない。それでも
+# 判定漏れが無いよう両方の範囲を残している。
+_MACHINE_DEPENDENT_RANGES = (
+    (0xED40, 0xEEFC),  # NEC選定IBM拡張文字
+    (0xFA40, 0xFC4B),  # IBM拡張文字
+)
+
+
+def find_machine_dependent_chars(text: str) -> list[str]:
+    """CP932の機種依存文字(NEC選定IBM拡張・IBM拡張)を含む文字を検出する。
+
+    見つかった文字を出現順に返す(無ければ空リスト)。
+    """
+    found = []
+    for ch in text:
+        try:
+            b = ch.encode("cp932")
+        except UnicodeEncodeError:
+            continue
+        if len(b) != 2:
+            continue
+        value = (b[0] << 8) | b[1]
+        if any(lo <= value <= hi for lo, hi in _MACHINE_DEPENDENT_RANGES):
+            found.append(ch)
+    return found
+
 
 class ValidationError(Exception):
     """複数件のエラーメッセージをまとめて保持する。"""
@@ -60,6 +95,22 @@ def validate_output_rows(rows: list[YayoiOutputRow]) -> list[str]:
                 f"伝票No {row.denpyo_no}: 摘要が全角32文字(64バイト)を超えています"
                 f"({desc_bytes}バイト): {row.description}"
             )
+        for field_name, value in (
+            ("借方勘定科目", row.debit.account),
+            ("借方補助科目", row.debit.sub_account),
+            ("貸方勘定科目", row.credit.account),
+            ("貸方補助科目", row.credit.sub_account),
+            ("摘要", row.description),
+            ("仕訳メモ", row.memo),
+        ):
+            bad_chars = find_machine_dependent_chars(value)
+            if bad_chars:
+                errors.append(
+                    f"伝票No {row.denpyo_no}: 「{field_name}」に機種依存文字が含まれています"
+                    f"({''.join(sorted(set(bad_chars)))})。環境によって文字化けする恐れが"
+                    "あるため、正しい字体か確認したうえで、標準的な字体に置き換えるか"
+                    "そのままで問題ないか判断してください"
+                )
         denpyo_no_dates[row.denpyo_no].add(row.transaction_date)
 
     for denpyo_no, dates in denpyo_no_dates.items():
