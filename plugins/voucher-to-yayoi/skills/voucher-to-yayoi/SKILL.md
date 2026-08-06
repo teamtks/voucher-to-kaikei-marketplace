@@ -58,6 +58,12 @@ python -m venv .venv
 (このセットアップ時のみインターネット接続が必要。以降は完全にローカルで動作する。
 セットアップ完了後は、`scripts/.venv/Scripts/python.exe` で各スクリプトを実行する。)
 
+このvenvは、上の最新化(`refresh_marketplace_cache.py`)でスキルの内容が入れ替わっても
+引き継がれるため、更新のたびに作り直す必要は無い。ただし、最新化の結果に
+「必要なライブラリの一覧(requirements.txt)が変わっています」と表示された場合だけは、
+既存のvenvの中身が古いので、`.venv\Scripts\pip install -r ../requirements.txt` を
+実行し直すこと。
+
 Pythonそのものがこのパソコンに入っていない場合は、`python`コマンドがエラーになる。
 その場合は、利用者に「Pythonをインストールしてほしい」と伝えるのではなく、Claude自身が
 `winget install --id Python.Python.3.12 -e --accept-source-agreements --accept-package-agreements --silent`

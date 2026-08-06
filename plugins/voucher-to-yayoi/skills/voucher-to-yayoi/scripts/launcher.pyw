@@ -254,13 +254,39 @@ def _enable_windows_dpi_awareness() -> None:
             pass
 
 
+def _fit_window_to_content(window, shrinkable, min_shrinkable_height: int = 120) -> None:
+    """並べ終えた部品が全部収まる大きさにウィンドウを合わせる。
+
+    ディスプレイの拡大設定(125%/150%等)がかかっていると文字が大きく描画されるため、
+    ウィンドウの大きさをピクセル数で決め打ちすると、下側のボタンがはみ出して
+    見えなくなる(実機の125%環境で、必要な高さ721pxに対し固定値600pxで発生)。
+    実際に必要な大きさを測ってから決めることで、どの拡大率でも収まるようにする。
+    画面より大きくならないよう上限も掛ける。
+
+    `shrinkable`は伸縮する部品(案件一覧)。ウィンドウを小さくする際に縮んでよいのは
+    ここだけなので、それ以外の部分の高さを下限として設定する。
+    """
+    window.update_idletasks()
+    need_w = window.winfo_reqwidth()
+    need_h = window.winfo_reqheight()
+
+    width = min(need_w, int(window.winfo_screenwidth() * 0.9))
+    height = min(need_h, int(window.winfo_screenheight() * 0.9))
+    window.geometry(f"{width}x{height}")
+
+    fixed_h = need_h - shrinkable.winfo_reqheight()
+    window.minsize(width, min(height, fixed_h + min_shrinkable_height))
+
+
 def main() -> None:
     _enable_windows_dpi_awareness()
 
     root_window = tk.Tk()
     root_window.title("仕訳.TeamTKS")
-    root_window.geometry("460x600")
     root_window.configure(bg=_COLOR_BG)
+    # ウィンドウの大きさはここでは決めない。ディスプレイの拡大設定(125%等)によって
+    # 文字の描画サイズが変わり、固定サイズだと下側のボタンがはみ出して見えなくなる
+    # ため、部品を全部並べ終えたあとに必要な高さを測って決める(main()の末尾を参照)。
 
     state = {"root_folder": get_root_folder(), "selected_project": None}
 
@@ -395,8 +421,10 @@ def main() -> None:
         bg=_COLOR_BG, fg=_COLOR_TEXT, font=("Yu Gothic UI", 10, "bold"),
     ).pack(fill="x", padx=14, pady=(12, 4))
 
+    # 各フレームのpackはmain()の末尾でまとめて行う。下側のボタンを先に(side="bottom"で)
+    # 配置し、伸縮する案件一覧を最後に配置することで、ウィンドウが小さいときに
+    # ボタンではなく一覧の方が縮むようにするため。
     list_frame = tk.Frame(root_window, bg=_COLOR_BORDER, bd=0)
-    list_frame.pack(fill="both", expand=True, padx=14, pady=(0, 10))
     scrollbar = tk.Scrollbar(list_frame)
     scrollbar.pack(side="right", fill="y")
     listbox = tk.Listbox(
@@ -411,7 +439,6 @@ def main() -> None:
     listbox.bind("<<ListboxSelect>>", on_listbox_select)
 
     detail_frame = tk.Frame(root_window, bg=_COLOR_CARD_BG, highlightthickness=1, highlightbackground=_COLOR_BORDER)
-    detail_frame.pack(fill="x", padx=14, pady=(0, 12))
 
     tk.Frame(detail_frame, bg=_COLOR_ACCENT, height=4).pack(fill="x")
 
@@ -442,12 +469,19 @@ def main() -> None:
     start_btn.pack(fill="x", padx=10, pady=10)
 
     button_frame = tk.Frame(root_window, bg=_COLOR_BG)
-    button_frame.pack(fill="x", padx=14, pady=(0, 14))
     _flat_button(button_frame, "＋ 新規プロジェクト", on_new_project, bg=_COLOR_HEADER).pack(side="left")
     _flat_button(
         button_frame, "置き場所を変更", on_change_root_folder, bg=_COLOR_BORDER, fg=_COLOR_TEXT,
         font=("Yu Gothic UI", 9),
     ).pack(side="right")
+
+    # 下から順に配置する(先にpackした方が下に来る)。最後に案件一覧を残りの領域へ
+    # 広げることで、ウィンドウを小さくしてもボタンが隠れず、一覧の方が縮む。
+    button_frame.pack(side="bottom", fill="x", padx=14, pady=(0, 14))
+    detail_frame.pack(side="bottom", fill="x", padx=14, pady=(0, 12))
+    list_frame.pack(fill="both", expand=True, padx=14, pady=(0, 10))
+
+    _fit_window_to_content(root_window, shrinkable=list_frame, min_shrinkable_height=120)
 
     refresh_project_list()
     root_window.mainloop()
