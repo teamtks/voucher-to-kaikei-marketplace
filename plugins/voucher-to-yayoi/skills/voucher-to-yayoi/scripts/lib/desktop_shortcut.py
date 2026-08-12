@@ -9,16 +9,22 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from .windows_paths import desktop_dir as resolve_desktop_dir
+
 
 class ShortcutError(RuntimeError):
     """ショートカットの作成に失敗した場合。"""
 
 
 def desktop_dir() -> Path:
-    """デスクトップフォルダのパス。見つからない場合はShortcutError。"""
-    desktop = Path.home() / "Desktop"
-    if not desktop.is_dir():
-        raise ShortcutError(f"デスクトップフォルダが見つかりません: {desktop}")
+    """デスクトップフォルダのパス。見つからない場合はShortcutError。
+
+    OneDriveへの移動や日本語フォルダ名に対応するため、Windows自身に問い合わせる
+    (詳細は windows_paths.desktop_dir のdocstringを参照)。
+    """
+    desktop = resolve_desktop_dir()
+    if desktop is None:
+        raise ShortcutError("デスクトップフォルダの場所を特定できませんでした")
     return desktop
 
 

@@ -12,6 +12,8 @@ CLAUDE.mdにその指示を書いておき、Claudeが出力先を明示的に�
 from datetime import date
 from pathlib import Path
 
+from .windows_paths import desktop_dir as resolve_desktop_dir
+
 DEFAULT_BASENAME = "仕訳インポート"
 
 
@@ -20,9 +22,14 @@ class OutputPathError(RuntimeError):
 
 
 def desktop_dir() -> Path:
-    desktop = Path.home() / "Desktop"
-    if not desktop.is_dir():
-        raise OutputPathError(f"デスクトップフォルダが見つかりません: {desktop}")
+    """デスクトップフォルダのパス。見つからない場合はOutputPathError。
+
+    OneDriveへの移動や日本語フォルダ名に対応するため、Windows自身に問い合わせる
+    (詳細は windows_paths.desktop_dir のdocstringを参照)。
+    """
+    desktop = resolve_desktop_dir()
+    if desktop is None:
+        raise OutputPathError("デスクトップフォルダの場所を特定できませんでした")
     return desktop
 
 
