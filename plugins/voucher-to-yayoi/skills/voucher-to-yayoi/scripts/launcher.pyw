@@ -197,6 +197,25 @@ def create_project(root: Path, name: str) -> Path:
     return project_dir
 
 
+def ensure_claude_md(project_dir: Path) -> bool:
+    """案件フォルダにCLAUDE.mdが無ければ、ひな形を書き込む。
+
+    「＋新規プロジェクト」で新規作成した案件には create_project() が必ずCLAUDE.mdを
+    付けるが、既に手作業で作られていたフォルダを「置き場所を変更」で後から取り込んだ
+    場合は create_project() を通らないため、CLAUDE.md が無いまま使われてしまう
+    (実際にこの状態で会計ソフト・課税方式の確認欄が無く、確認が行われない不具合が
+    起きたことを確認済み)。案件を開くたびに毎回チェックし、無ければ補う。
+
+    既にCLAUDE.mdがある場合は何もしない(内容の上書きは絶対にしない)。
+    戻り値は「今回新たに作成したかどうか」。
+    """
+    claude_md_path = project_dir / "CLAUDE.md"
+    if claude_md_path.is_file():
+        return False
+    claude_md_path.write_text(CLAUDE_MD_TEMPLATE, encoding="utf-8")
+    return True
+
+
 def build_claude_open_uri(folder: Path) -> str:
     """指定フォルダを作業ディレクトリにしてClaude Codeセッションを開くURI。"""
     encoded = urllib.parse.quote(str(folder), safe="")
@@ -204,6 +223,7 @@ def build_claude_open_uri(folder: Path) -> str:
 
 
 def open_project_in_claude(folder: Path) -> None:
+    ensure_claude_md(folder)
     uri = build_claude_open_uri(folder)
     os.startfile(uri)
 
