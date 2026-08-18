@@ -21,6 +21,7 @@ voucher-to-yayoi)の中身を最新の内容で置き換える。Claude Desktop�
 使い方:
     python refresh_marketplace_cache.py
 """
+import os
 import shutil
 import subprocess
 import sys
@@ -28,6 +29,9 @@ from pathlib import Path
 
 MARKETPLACE_NAME = "voucher-to-yayoi-marketplace"
 PLUGIN_NAME = "voucher-to-yayoi"
+
+# 別のPythonで自分を起動し直したときに、それ以上繰り返さないための目印
+_RELAUNCH_GUARD = "VOUCHER_TO_YAYOI_REFRESH_RELAUNCHED"
 
 HOME = Path.home()
 MARKETPLACE_DIR = HOME / ".claude" / "plugins" / "marketplaces" / MARKETPLACE_NAME
@@ -89,7 +93,65 @@ def _replace_skill_dir(src: Path, dest: Path) -> None:
         )
 
 
+def _find_python_outside_cache() -> "Path | None":
+    """入れ替え対象(キャッシュ)の外にあるPythonを探す。"""
+    cache_root = CACHE_ROOT.resolve()
+    for name in ("python", "python3", "py"):
+        found = shutil.which(name)
+        if not found:
+            continue
+        candidate = Path(found).resolve()
+        if not candidate.is_relative_to(cache_root):
+            return candidate
+    return None
+
+
+def _relaunch_outside_cache_if_needed() -> bool:
+    """自分自身が入れ替え対象のフォルダ内のPythonで動いている場合、外側のPythonで
+    起動し直す。起動し直したならTrue(呼び出し側はそのまま終了してよい)。
+
+    マーケットプレイス経由でインストールした場合、Pythonの実行環境(venv)は
+    入れ替え対象のキャッシュフォルダの中に作られる。そのvenvのPythonでこの
+    スクリプトを動かすと、使用中のファイルを消せず更新できないため、以前は
+    メッセージを出してスキップしていた。しかしSKILL.mdは「セットアップ後は
+    venvのPythonで各スクリプトを実行する」とも案内しており、実際にvenvの
+    Pythonで実行されて更新が何度も見送られ、他のPCのスキルが古いまま止まる
+    事象が起きた。案内に頼らず、この場で外側のPythonに切り替える。
+    """
+    if os.environ.get(_RELAUNCH_GUARD):
+        return False  # 既に切り替え済み。これ以上は繰り返さない
+    try:
+        running_python = Path(sys.executable).resolve()
+        if not running_python.is_relative_to(CACHE_ROOT.resolve()):
+            return False
+    except (OSError, ValueError):
+        return False
+
+    external = _find_python_outside_cache()
+    if external is None:
+        print(
+            "更新できませんでした: 入れ替え対象のフォルダ内にあるPythonで実行されており、"
+            "代わりに使えるPythonが見つかりませんでした。"
+            "システムのPythonで `python scripts\\refresh_marketplace_cache.py` を実行してください。"
+        )
+        return True
+
+    env = dict(os.environ, **{_RELAUNCH_GUARD: "1"})
+    result = subprocess.run(
+        [str(external), str(Path(__file__).resolve())], env=env,
+        capture_output=True, text=True,
+    )
+    if result.stdout:
+        print(result.stdout, end="")
+    if result.stderr:
+        print(result.stderr, end="")
+    return True
+
+
 def main() -> None:
+    if _relaunch_outside_cache_if_needed():
+        return
+
     if not (MARKETPLACE_DIR / ".git").is_dir():
         print("マーケットプレイス経由のインストールではないため、確認をスキップします。")
         return
@@ -133,7 +195,9 @@ def main() -> None:
             continue
 
         # 入れ替える対象の中にあるPythonでこのスクリプト自身が動いていると、
-        # 使用中のファイルを消せずに失敗する。その場合は手を付けずに知らせる。
+        # 使用中のファイルを消せずに失敗する。通常は起動時に外側のPythonへ
+        # 切り替えているのでここには来ないが、切り替え先が見つからなかった等の
+        # 場合に備えて、壊さずに知らせる。
         if running_python.is_relative_to(dest.resolve()):
             print(
                 f"更新をスキップしました: {dest}\n"
