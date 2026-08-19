@@ -319,6 +319,26 @@ def build_html(data: dict, suggested_filename: str) -> str:
     border-radius: 5px; background: #fafafa; cursor: pointer; color: #555;
   }}
   .add-leg-btn:hover {{ background: #f0f0f0; }}
+  /* 伝票ごとの削除。誤操作を防ぐため、すぐ消さず「削除予定」として残し、
+     取り消せるようにする(保存するJSONからは除かれる) */
+  .del-voucher-btn {{
+    appearance: none; -webkit-appearance: none; margin-left: auto;
+    font-size: 12px; padding: 4px 10px; border-radius: 5px;
+    border: 1px solid #e0b4b4; background: #fff; color: #a33; cursor: pointer;
+  }}
+  .del-voucher-btn:hover {{ background: #fdf0f0; }}
+  .voucher-card.deleted {{
+    opacity: .6; background: #f4f4f4; border-style: dashed; border-color: #bbb;
+  }}
+  .voucher-card.deleted .card-total {{ text-decoration: line-through; }}
+  .voucher-card.deleted .del-voucher-btn {{
+    border-color: #b4c8e0; color: #2f6fdb; font-weight: bold;
+  }}
+  .deleted-badge {{
+    display: none; font-size: 12px; font-weight: bold; color: #a33;
+    background: #fdeaea; border: 1px solid #e8c4c4; border-radius: 4px; padding: 2px 8px;
+  }}
+  .voucher-card.deleted .deleted-badge {{ display: inline-block; }}
   .missing-note {{ margin-top: 6px; font-size: 12px; color: #b23c17; }}
 </style>
 </head>
@@ -357,6 +377,9 @@ def build_html(data: dict, suggested_filename: str) -> str:
   let legUidCounter = 0;
   let currentSelectedVoucherId = null;
   let dirty = false;
+  // 「削除予定」にした伝票のvoucher_id。実際にデータから消すのは保存時で、
+  // それまでは画面上で取り消せる(誤操作で仕訳を失わないため)
+  let deletedVouchers = new Set();
 
   function esc(s) {{
     s = (s === undefined || s === null) ? "" : String(s);
@@ -471,8 +494,9 @@ def build_html(data: dict, suggested_filename: str) -> str:
     const first = group[0];
     const legsHtml = group.map(legBlockHTML).join("");
     const closing = first.closing_flag || "";
+    const isDeleted = deletedVouchers.has(voucherId);
     return `
-      <div class="voucher-card" data-voucher-id="${{esc(voucherId)}}">
+      <div class="voucher-card${{isDeleted ? " deleted" : ""}}" data-voucher-id="${{esc(voucherId)}}">
         <div class="card-header">
           <input type="date" class="date-input" data-voucher-id="${{esc(voucherId)}}" data-field="__date" value="${{esc(first.transaction_date)}}">
           <select class="closing-select" data-voucher-id="${{esc(voucherId)}}" data-field="__closing_flag">
@@ -480,10 +504,35 @@ def build_html(data: dict, suggested_filename: str) -> str:
             <option value="本決" ${{closing === "本決" ? "selected" : ""}}>本決算</option>
           </select>
           <span class="card-total" data-total-for="${{esc(voucherId)}}"></span>
+          <span class="deleted-badge">削除予定</span>
+          <button type="button" class="del-voucher-btn" data-voucher-id="${{esc(voucherId)}}">${{
+            isDeleted ? "元に戻す" : "🗑 伝票ごと削除"
+          }}</button>
         </div>
         <div class="legs-container">${{legsHtml}}</div>
-        <button type="button" class="add-leg-btn" data-voucher-id="${{esc(voucherId)}}">＋ 明細行を追加(複合仕訳にする)</button>
+        ${{isDeleted ? "" : `<button type="button" class="add-leg-btn" data-voucher-id="${{esc(voucherId)}}">＋ 明細行を追加(複合仕訳にする)</button>`}}
       </div>`;
+  }}
+
+  // 伝票そのものを削除する(明細行1件の削除ではなく、伝票まるごと)。
+  // 誤って消しても取り戻せるよう、その場では消さずに「削除予定」として印を付け、
+  // 保存(ダウンロード)するJSONから除く方式にしている。
+  function toggleVoucherDeleted(voucherId) {{
+    if (deletedVouchers.has(voucherId)) {{
+      deletedVouchers.delete(voucherId);
+    }} else {{
+      const group = VOUCHER_DATA.legs.filter(l => l.voucher_id === voucherId);
+      const label = (group[0] && group[0].description) || voucherId;
+      const ok = confirm(
+        "この伝票を削除しますか?\\n\\n" + label + "\\n\\n" +
+        "保存(ダウンロード)するJSONから、この伝票の全明細が除かれます。\\n" +
+        "この画面の「元に戻す」でいつでも取り消せます。"
+      );
+      if (!ok) return;
+      deletedVouchers.add(voucherId);
+    }}
+    markDirty();
+    renderAll();
   }}
 
   function updateCardTotals(voucherId) {{
@@ -513,10 +562,23 @@ def build_html(data: dict, suggested_filename: str) -> str:
 
   function renderAll() {{
     const {{ groups, order }} = groupLegs(VOUCHER_DATA.legs);
-    document.getElementById("countLabel").textContent = "仕訳チェック資料(件数: " + order.length + ")";
+    const deletedCount = order.filter(vid => deletedVouchers.has(vid)).length;
+    const remaining = order.length - deletedCount;
+    document.getElementById("countLabel").textContent =
+      "仕訳チェック資料(件数: " + order.length + ")" +
+      (deletedCount ? "  ※ うち" + deletedCount + "件を削除予定(残り" + remaining + "件)" : "");
     const container = document.getElementById("cardsContainer");
     container.innerHTML = order.map(vid => buildCardHTML(vid, groups.get(vid))).join("");
     order.forEach(updateCardTotals);
+
+    // 削除予定の伝票は、内容を見られるように残したうえで編集できないようにする
+    // (「元に戻す」ボタンだけは押せる必要がある)
+    container.querySelectorAll(".voucher-card.deleted").forEach(card => {{
+      card.querySelectorAll("input, select, textarea, button").forEach(el => {{
+        if (!el.classList.contains("del-voucher-btn")) el.disabled = true;
+      }});
+    }});
+
     if (currentSelectedVoucherId && groups.has(currentSelectedVoucherId)) {{
       const card = container.querySelector('.voucher-card[data-voucher-id="' + CSS.escape(currentSelectedVoucherId) + '"]');
       if (card) card.classList.add("selected");
@@ -681,7 +743,10 @@ def build_html(data: dict, suggested_filename: str) -> str:
     if (!leg) return;
     const count = VOUCHER_DATA.legs.filter(l => l.voucher_id === leg.voucher_id).length;
     if (count <= 1) {{
-      alert("この伝票には明細行が1件しかないため、この画面からは削除できません。伝票ごと不要な場合は元のJSONファイルを編集してください。");
+      alert(
+        "この伝票には明細行が1件しかないため、明細行だけを削除することはできません。\\n" +
+        "この伝票自体が不要な場合は、右上の「🗑 伝票ごと削除」を使ってください。"
+      );
       return;
     }}
     currentSelectedVoucherId = leg.voucher_id;
@@ -753,13 +818,33 @@ def build_html(data: dict, suggested_filename: str) -> str:
   }}
 
   function saveJSON() {{
+    // 「削除予定」にした伝票を、ここで初めて実際に除く
+    const keptLegs = VOUCHER_DATA.legs.filter(l => !deletedVouchers.has(l.voucher_id));
+    const removedCount = VOUCHER_DATA.legs.length - keptLegs.length;
+    if (keptLegs.length === 0) {{
+      alert(
+        "すべての伝票が削除予定になっているため、保存できません。\\n" +
+        "少なくとも1件は「元に戻す」で残してください。"
+      );
+      return;
+    }}
+    if (removedCount > 0) {{
+      const ok = confirm(
+        "削除予定の伝票を除いて保存します。\\n\\n" +
+        "除かれる明細: " + removedCount + "件\\n" +
+        "保存される明細: " + keptLegs.length + "件\\n\\n" +
+        "よろしいですか?"
+      );
+      if (!ok) return;
+    }}
+
     const out = {{
       start_denpyo_no: VOUCHER_DATA.start_denpyo_no,
       // 簡易課税の事業区分は顧問先ごとの設定なので、保存し直しても失わないようにする
       ...(VOUCHER_DATA.sales_business_type != null
         ? {{ sales_business_type: VOUCHER_DATA.sales_business_type }}
         : {{}}),
-      legs: VOUCHER_DATA.legs.map(leg => {{
+      legs: keptLegs.map(leg => {{
         const copy = Object.assign({{}}, leg);
         delete copy._uid;
         return copy;
@@ -786,6 +871,7 @@ def build_html(data: dict, suggested_filename: str) -> str:
     VOUCHER_DATA = cloneInitial();
     currentSelectedVoucherId = null;
     dirty = false;
+    deletedVouchers = new Set();  // 削除予定も取り消す
     document.getElementById("dirtyBanner").style.display = "none";
     document.getElementById("savedNote").style.display = "none";
     showPlaceholder("左の一覧から仕訳を選んでください");
@@ -807,6 +893,7 @@ def build_html(data: dict, suggested_filename: str) -> str:
     t.value = fmtAmount(value);
   }});
   container.addEventListener("click", e => {{
+    if (e.target.classList.contains("del-voucher-btn")) {{ e.stopPropagation(); toggleVoucherDeleted(e.target.dataset.voucherId); return; }}
     if (e.target.classList.contains("del-leg-btn")) {{ e.stopPropagation(); removeLeg(e.target.dataset.uid); return; }}
     if (e.target.classList.contains("add-leg-btn")) {{ e.stopPropagation(); addLeg(e.target.dataset.voucherId); return; }}
     if (e.target.closest("input, select, button")) return;
