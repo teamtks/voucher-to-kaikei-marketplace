@@ -340,6 +340,30 @@ def build_html(data: dict, suggested_filename: str) -> str:
     border-radius: 5px; background: #fafafa; cursor: pointer; color: #555;
   }}
   .add-leg-btn:hover {{ background: #f0f0f0; }}
+  /* 伝票の通し番号と、元になった証憑のページ */
+  .card-meta {{
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 8px; font-size: 12px; color: #666;
+  }}
+  .card-no {{
+    font-weight: bold; color: #333; background: #eef1f5;
+    border-radius: 4px; padding: 2px 8px; font-variant-numeric: tabular-nums;
+  }}
+  .card-source {{ color: #777; }}
+  /* あとで確認する仕訳に付ける付箋 */
+  .flag-btn {{
+    appearance: none; -webkit-appearance: none; margin-left: auto; white-space: nowrap;
+    font-size: 12px; padding: 3px 9px; border-radius: 5px;
+    border: 1px solid #ddd; background: #fff; color: #777; cursor: pointer;
+  }}
+  .flag-btn:hover {{ background: #fffaf0; border-color: #e8c98a; color: #8a6d1f; }}
+  .voucher-card.flagged {{
+    border-color: #e8b84b; box-shadow: 0 0 0 2px rgba(232,184,75,.2);
+    background: #fffdf6;
+  }}
+  .voucher-card.flagged .flag-btn {{
+    border-color: #e8b84b; background: #fff4d6; color: #8a6d1f; font-weight: bold;
+  }}
   /* 伝票ごとの削除。誤操作を防ぐため、すぐ消さず「削除予定」として残し、
      取り消せるようにする(保存するJSONからは除かれる) */
   .del-voucher-btn {{
@@ -406,6 +430,8 @@ def build_html(data: dict, suggested_filename: str) -> str:
   // 「削除予定」にした伝票のvoucher_id。実際にデータから消すのは保存時で、
   // それまでは画面上で取り消せる(誤操作で仕訳を失わないため)
   let deletedVouchers = new Set();
+  // 「あとで確認する」印(付箋)を付けた伝票のvoucher_id
+  let flaggedVouchers = new Set();
 
   function esc(s) {{
     s = (s === undefined || s === null) ? "" : String(s);
@@ -426,6 +452,14 @@ def build_html(data: dict, suggested_filename: str) -> str:
     d.legs = d.legs || [];
     d.legs.forEach(leg => {{ leg._uid = "leg-" + (legUidCounter++); }});
     return d;
+  }}
+
+  // 入力JSONに needs_review が付いている伝票は、最初から付箋を立てておく
+  // (チェック資料を作り直しても、前回付けた印が引き継がれるようにするため)
+  function flaggedFromData(data) {{
+    const s = new Set();
+    (data.legs || []).forEach(leg => {{ if (leg.needs_review) s.add(leg.voucher_id); }});
+    return s;
   }}
 
   function findLegByUid(uid) {{
@@ -456,6 +490,7 @@ def build_html(data: dict, suggested_filename: str) -> str:
         savedAt: new Date().toISOString(),
         data: VOUCHER_DATA,
         deleted: Array.from(deletedVouchers),
+        flagged: Array.from(flaggedVouchers),
       }}));
     }} catch (e) {{
       // 保存できない環境でも、その回の作業自体は続けられるので止めない
@@ -556,13 +591,36 @@ def build_html(data: dict, suggested_filename: str) -> str:
       </div>`;
   }}
 
-  function buildCardHTML(voucherId, group) {{
+  // 証憑画像のファイル名から「元のファイル名」と「何ページ目か」を取り出す。
+  // このスキルが出力する画像は「<元ファイル名>_original_pageN.png」という決まった
+  // 名前なので、そこから元のPDFの何ページ目だったかを画面に出せる。
+  function sourcePageLabel(sourceImage) {{
+    if (!sourceImage) return "";
+    const name = String(sourceImage).split(/[\\\\/]/).pop();
+    const m = name.match(/^(.+?)_(?:original|masked)_page(\\d+)\\.png$/i);
+    if (m) return m[1] + " p." + m[2];
+    return name.replace(/\\.[^.]+$/, "");
+  }}
+
+  function buildCardHTML(voucherId, group, cardNo) {{
     const first = group[0];
     const legsHtml = group.map(legBlockHTML).join("");
     const closing = first.closing_flag || "";
     const isDeleted = deletedVouchers.has(voucherId);
+    const isFlagged = flaggedVouchers.has(voucherId);
+    const source = sourcePageLabel(first.source_image);
+    const classes = ["voucher-card"];
+    if (isDeleted) classes.push("deleted");
+    if (isFlagged) classes.push("flagged");
     return `
-      <div class="voucher-card${{isDeleted ? " deleted" : ""}}" data-voucher-id="${{esc(voucherId)}}">
+      <div class="${{classes.join(" ")}}" data-voucher-id="${{esc(voucherId)}}">
+        <div class="card-meta">
+          <span class="card-no">No.${{cardNo}}</span>
+          ${{source ? `<span class="card-source">証憑: ${{esc(source)}}</span>` : ""}}
+          <button type="button" class="flag-btn" data-voucher-id="${{esc(voucherId)}}" title="あとで確認する仕訳に印を付ける">${{
+            isFlagged ? "🔖 要確認(解除)" : "🔖 要確認"
+          }}</button>
+        </div>
         <div class="card-header">
           <input type="date" class="date-input" data-voucher-id="${{esc(voucherId)}}" data-field="__date" value="${{esc(first.transaction_date)}}">
           <select class="closing-select" data-voucher-id="${{esc(voucherId)}}" data-field="__closing_flag">
@@ -583,6 +641,19 @@ def build_html(data: dict, suggested_filename: str) -> str:
   // 伝票そのものを削除する(明細行1件の削除ではなく、伝票まるごと)。
   // 誤って消しても取り戻せるよう、その場では消さずに「削除予定」として印を付け、
   // 保存(ダウンロード)するJSONから除く方式にしている。
+  // 「あとで確認する」印(付箋)を付け外しする。金額や科目には影響せず、
+  // 見直すべき仕訳を見失わないための目印。保存するJSONにも needs_review として
+  // 残るので、チェック資料を作り直しても印は引き継がれる。
+  function toggleVoucherFlagged(voucherId) {{
+    if (flaggedVouchers.has(voucherId)) {{
+      flaggedVouchers.delete(voucherId);
+    }} else {{
+      flaggedVouchers.add(voucherId);
+    }}
+    markDirty();
+    renderAll();
+  }}
+
   function toggleVoucherDeleted(voucherId) {{
     if (deletedVouchers.has(voucherId)) {{
       deletedVouchers.delete(voucherId);
@@ -629,19 +700,24 @@ def build_html(data: dict, suggested_filename: str) -> str:
   function renderAll() {{
     const {{ groups, order }} = groupLegs(VOUCHER_DATA.legs);
     const deletedCount = order.filter(vid => deletedVouchers.has(vid)).length;
+    const flaggedCount = order.filter(vid => flaggedVouchers.has(vid)).length;
     const remaining = order.length - deletedCount;
     document.getElementById("countLabel").textContent =
       "仕訳チェック資料(件数: " + order.length + ")" +
-      (deletedCount ? "  ※ うち" + deletedCount + "件を削除予定(残り" + remaining + "件)" : "");
+      (deletedCount ? "  ※ うち" + deletedCount + "件を削除予定(残り" + remaining + "件)" : "") +
+      (flaggedCount ? "  🔖 要確認 " + flaggedCount + "件" : "");
     const container = document.getElementById("cardsContainer");
-    container.innerHTML = order.map(vid => buildCardHTML(vid, groups.get(vid))).join("");
+    container.innerHTML = order.map((vid, i) => buildCardHTML(vid, groups.get(vid), i + 1)).join("");
     order.forEach(updateCardTotals);
 
     // 削除予定の伝票は、内容を見られるように残したうえで編集できないようにする
     // (「元に戻す」ボタンだけは押せる必要がある)
     container.querySelectorAll(".voucher-card.deleted").forEach(card => {{
       card.querySelectorAll("input, select, textarea, button").forEach(el => {{
-        if (!el.classList.contains("del-voucher-btn")) el.disabled = true;
+        // 「元に戻す」と付箋の付け外しだけは、削除予定でも操作できるようにする
+        if (!el.classList.contains("del-voucher-btn") && !el.classList.contains("flag-btn")) {{
+          el.disabled = true;
+        }}
       }});
     }});
 
@@ -913,6 +989,10 @@ def build_html(data: dict, suggested_filename: str) -> str:
       legs: keptLegs.map(leg => {{
         const copy = Object.assign({{}}, leg);
         delete copy._uid;
+        // 付箋(要確認)の状態を残す。チェック資料を作り直しても引き継がれ、
+        // Claude側もどの仕訳を見直すべきか分かるようにするため。
+        if (flaggedVouchers.has(leg.voucher_id)) copy.needs_review = true;
+        else delete copy.needs_review;
         return copy;
       }}),
     }};
@@ -944,6 +1024,7 @@ def build_html(data: dict, suggested_filename: str) -> str:
     currentSelectedVoucherId = null;
     dirty = false;
     deletedVouchers = new Set();  // 削除予定も取り消す
+    flaggedVouchers = flaggedFromData(VOUCHER_DATA);  // 付箋は元データの状態に戻す
     document.getElementById("dirtyBanner").style.display = "none";
     document.getElementById("savedNote").style.display = "none";
     document.getElementById("restoredBanner").classList.remove("visible");
@@ -956,10 +1037,12 @@ def build_html(data: dict, suggested_filename: str) -> str:
     const draft = loadDraft();
     if (!draft || !draft.data || !Array.isArray(draft.data.legs)) {{
       VOUCHER_DATA = cloneInitial();
+      flaggedVouchers = flaggedFromData(VOUCHER_DATA);
       return;
     }}
     VOUCHER_DATA = draft.data;
     deletedVouchers = new Set(draft.deleted || []);
+    flaggedVouchers = new Set(draft.flagged || []);
     // 明細を追加したときにIDが衝突しないよう、採番を続きから始める
     let maxUid = -1;
     VOUCHER_DATA.legs.forEach(leg => {{
@@ -994,6 +1077,7 @@ def build_html(data: dict, suggested_filename: str) -> str:
     t.value = fmtAmount(value);
   }});
   container.addEventListener("click", e => {{
+    if (e.target.classList.contains("flag-btn")) {{ e.stopPropagation(); toggleVoucherFlagged(e.target.dataset.voucherId); return; }}
     if (e.target.classList.contains("del-voucher-btn")) {{ e.stopPropagation(); toggleVoucherDeleted(e.target.dataset.voucherId); return; }}
     if (e.target.classList.contains("del-leg-btn")) {{ e.stopPropagation(); removeLeg(e.target.dataset.uid); return; }}
     if (e.target.classList.contains("add-leg-btn")) {{ e.stopPropagation(); addLeg(e.target.dataset.voucherId); return; }}
