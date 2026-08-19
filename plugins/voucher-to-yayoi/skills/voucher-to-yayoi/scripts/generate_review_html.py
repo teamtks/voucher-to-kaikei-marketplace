@@ -30,6 +30,7 @@
 """
 import argparse
 import base64
+import hashlib
 import html
 import json
 import mimetypes
@@ -179,6 +180,14 @@ def build_html(data: dict, suggested_filename: str) -> str:
     tax_options_json = json.dumps(_tax_options(business_type), ensure_ascii=False)
     invoice_options_json = json.dumps(_INVOICE_OPTIONS, ensure_ascii=False)
 
+    # 画面上の訂正をブラウザに一時保存するためのキー。元データの内容から作るので、
+    # 同じチェック資料を開き直せば前回の訂正が戻り、別の案件の資料とは混ざらない
+    # (ファイル名だけだと、顧問先が違っても同名になりうるため内容から作る)。
+    doc_key = hashlib.sha256(
+        json.dumps(data, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:16]
+    doc_key_json = json.dumps(doc_key)
+
     return f"""<!doctype html>
 <html lang="ja">
 <head>
@@ -255,6 +264,18 @@ def build_html(data: dict, suggested_filename: str) -> str:
   #toolbar #saveBtn {{ background: #2f6fdb; color: #fff; border-color: #2f6fdb; font-weight: bold; }}
   #saveBtn:hover {{ background: #2559b3; }}
   #resetBtn:hover {{ background: #f2f2f2; }}
+  #restoredBanner {{
+    display: none; background: #e8f4ea; border: 1px solid #b7ddc0; border-radius: 6px;
+    padding: 9px 14px; margin: 0 8px 12px; font-size: 13px; color: #2c5c39;
+    align-items: center; gap: 10px;
+  }}
+  #restoredBanner.visible {{ display: flex; }}
+  #discardDraftBtn {{
+    appearance: none; -webkit-appearance: none; margin-left: auto; white-space: nowrap;
+    font-size: 12px; padding: 5px 10px; border-radius: 5px;
+    border: 1px solid #a9c9b2; background: #fff; color: #2c5c39; cursor: pointer;
+  }}
+  #discardDraftBtn:hover {{ background: #f0f7f2; }}
   #dirtyBanner {{
     display: none; background: #fff3cd; border: 1px solid #ffe08a; border-radius: 6px;
     padding: 9px 14px; margin: 0 8px 12px; font-size: 13px; color: #7a5c00;
@@ -360,6 +381,10 @@ def build_html(data: dict, suggested_filename: str) -> str:
       <button id="saveBtn" type="button">変更をJSONとして保存(ダウンロード)</button>
       <button id="resetBtn" type="button">元に戻す</button>
     </div>
+    <div id="restoredBanner">
+      <span id="restoredText"></span>
+      <button id="discardDraftBtn" type="button">破棄して最初の状態に戻す</button>
+    </div>
     <div id="dirtyBanner">まだ保存(ダウンロード)していない変更があります。訂正が終わったら「変更をJSONとして保存」を押してください。</div>
     <div id="savedNote"></div>
     {warning_banner}
@@ -372,6 +397,7 @@ def build_html(data: dict, suggested_filename: str) -> str:
   const SUGGESTED_FILENAME = {suggested_filename_json};
   const TAX_OPTIONS = {tax_options_json};
   const INVOICE_OPTIONS = {invoice_options_json};
+  const DOC_KEY = {doc_key_json};
 
   let VOUCHER_DATA = null;
   let legUidCounter = 0;
@@ -417,9 +443,49 @@ def build_html(data: dict, suggested_filename: str) -> str:
     return {{ groups, order }};
   }}
 
+  // ===== 画面上の訂正をブラウザに一時保存する =====
+  // このHTMLは生成時のデータを埋め込んだ固定ファイルで、「変更をJSONとして保存」は
+  // 別ファイルをダウンロードするだけなので、同じHTMLを開き直すと訂正前の状態に
+  // 戻ってしまう。作業を中断して閉じても続きからやり直せるよう、訂正内容を
+  // ブラウザ内に保存しておく。
+  const STORAGE_KEY = "voucher-to-yayoi-review:" + DOC_KEY;
+
+  function saveDraft() {{
+    try {{
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({{
+        savedAt: new Date().toISOString(),
+        data: VOUCHER_DATA,
+        deleted: Array.from(deletedVouchers),
+      }}));
+    }} catch (e) {{
+      // 保存できない環境でも、その回の作業自体は続けられるので止めない
+    }}
+  }}
+
+  function loadDraft() {{
+    try {{
+      const raw = localStorage.getItem(STORAGE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    }} catch (e) {{
+      return null;
+    }}
+  }}
+
+  function clearDraft() {{
+    try {{ localStorage.removeItem(STORAGE_KEY); }} catch (e) {{}}
+  }}
+
+  function formatSavedAt(iso) {{
+    const d = new Date(iso);
+    if (isNaN(d)) return "";
+    const p = n => String(n).padStart(2, "0");
+    return `${{d.getFullYear()}}年${{d.getMonth() + 1}}月${{d.getDate()}}日 ${{p(d.getHours())}}:${{p(d.getMinutes())}}`;
+  }}
+
   function markDirty() {{
     dirty = true;
     document.getElementById("dirtyBanner").style.display = "block";
+    saveDraft();
   }}
 
   // 税区分の文字列を「基本区分」と「インボイス区分」に分解する。
@@ -868,14 +934,49 @@ def build_html(data: dict, suggested_filename: str) -> str:
 
   function resetAll() {{
     if (!confirm("この画面で行った変更をすべて破棄して、最初の内容に戻しますか?")) return;
+    discardDraft();
+  }}
+
+  // 保存しておいた訂正内容を捨てて、生成時の状態に戻す
+  function discardDraft() {{
+    clearDraft();
     VOUCHER_DATA = cloneInitial();
     currentSelectedVoucherId = null;
     dirty = false;
     deletedVouchers = new Set();  // 削除予定も取り消す
     document.getElementById("dirtyBanner").style.display = "none";
     document.getElementById("savedNote").style.display = "none";
+    document.getElementById("restoredBanner").classList.remove("visible");
     showPlaceholder("左の一覧から仕訳を選んでください");
     renderAll();
+  }}
+
+  // 開いたときに、前回の訂正内容が残っていれば復元する
+  function restoreDraftOrInitial() {{
+    const draft = loadDraft();
+    if (!draft || !draft.data || !Array.isArray(draft.data.legs)) {{
+      VOUCHER_DATA = cloneInitial();
+      return;
+    }}
+    VOUCHER_DATA = draft.data;
+    deletedVouchers = new Set(draft.deleted || []);
+    // 明細を追加したときにIDが衝突しないよう、採番を続きから始める
+    let maxUid = -1;
+    VOUCHER_DATA.legs.forEach(leg => {{
+      const n = parseInt(String(leg._uid || "").replace("leg-", ""), 10);
+      if (!isNaN(n) && n > maxUid) maxUid = n;
+      if (!leg._uid) leg._uid = "leg-" + (++maxUid);
+    }});
+    legUidCounter = maxUid + 1;
+
+    const when = formatSavedAt(draft.savedAt);
+    document.getElementById("restoredText").textContent =
+      "前回この画面で行った訂正内容を復元しました" + (when ? "(" + when + "時点)" : "") +
+      "。この内容で続きから作業できます。";
+    document.getElementById("restoredBanner").classList.add("visible");
+    // 復元した内容はまだJSONとして保存されていないので、その旨も出す
+    dirty = true;
+    document.getElementById("dirtyBanner").style.display = "block";
   }}
 
   document.getElementById("saveBtn").addEventListener("click", saveJSON);
@@ -901,8 +1002,13 @@ def build_html(data: dict, suggested_filename: str) -> str:
     if (card) selectVoucher(card.dataset.voucherId);
   }});
 
+  document.getElementById("discardDraftBtn").addEventListener("click", () => {{
+    if (!confirm("復元した訂正内容を破棄して、最初の状態に戻しますか?")) return;
+    discardDraft();
+  }});
+
   initZoomControls();
-  VOUCHER_DATA = cloneInitial();
+  restoreDraftOrInitial();
   renderAll();
 </script>
 </body>
