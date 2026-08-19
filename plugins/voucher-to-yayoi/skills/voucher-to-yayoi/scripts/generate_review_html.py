@@ -981,6 +981,10 @@ def build_html(data: dict, suggested_filename: str) -> str:
     }}
 
     const out = {{
+      // この画面から保存したファイルであることの印。元のJSONには無いので、
+      // Claude側が「利用者が訂正して保存したファイル」を確実に見分けられる
+      // (元のJSONを見て「修正されていません」と誤って答える事故を防ぐため)。
+      edited_at: new Date().toISOString(),
       start_denpyo_no: VOUCHER_DATA.start_denpyo_no,
       // 簡易課税の事業区分は顧問先ごとの設定なので、保存し直しても失わないようにする
       ...(VOUCHER_DATA.sales_business_type != null
@@ -1008,7 +1012,11 @@ def build_html(data: dict, suggested_filename: str) -> str:
     dirty = false;
     document.getElementById("dirtyBanner").style.display = "none";
     const note = document.getElementById("savedNote");
-    note.textContent = "保存しました。ダウンロードフォルダの「" + SUGGESTED_FILENAME + "」を確認してください。";
+    note.textContent =
+      "保存しました。ダウンロードフォルダに「" + SUGGESTED_FILENAME + "」ができています。" +
+      "Claudeには「チェック資料を訂正して保存しました。ダウンロードフォルダの " +
+      SUGGESTED_FILENAME + " を使ってください」と伝えてください。" +
+      "(同じ名前のファイルが複数ある場合は、いちばん新しいものが今回の保存分です)";
     note.style.display = "block";
   }}
 
