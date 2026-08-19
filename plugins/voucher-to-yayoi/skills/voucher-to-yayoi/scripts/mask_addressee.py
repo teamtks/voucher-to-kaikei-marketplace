@@ -10,13 +10,17 @@ Read等で開くこと。元のPDF/画像ファイルを直接Claudeに読み込
 「自社を特定できる情報」である。これを黒塗りすることで、取引先分析に不要な
 自社の識別情報が外部に渡ることを防ぐ。具体的には以下を検出・黒塗りする:
 
-- 宛名(「様」「御中」で終わる行)
-- 住所(都道府県名を含む行、郵便番号)
-- 電話番号
-- 金融機関名・支店名(通帳等)
-- 店番・口座番号
-- カード会社名・カード番号(クレジットカード明細等)
-- 自社のインボイス登録番号(--own-invoice-no で指定した番号のみ)
+- 宛名(「様」「御中」で終わる行) … 常に
+- 自社のインボイス登録番号(--own-invoice-no で指定した番号のみ) … 常に
+- 住所(都道府県名を含む行、郵便番号)・電話番号 … **宛名の近くにある場合のみ**
+- 金融機関名・支店名・店番・口座番号・カード会社名・カード番号
+  … **通帳やカード明細のようにそれが自社のものである書類か、宛名の近くの場合のみ**
+
+住所・電話・口座に条件を付けているのは、これらが文字の見た目だけでは「自社のもの」か
+「取引先のもの」か区別できないためである。レシート・領収証には支払先(店舗)の住所と
+電話番号が必ず印字されており、条件なしで黒塗りすると支払先の情報まで消してしまう。
+実際に、支払先の名称や住所が黒塗りされ、インボイス登録番号が読み取りにくくなる
+事象が起きたため、書類内での位置(宛名との近さ)と書類の種類を手がかりに絞り込む。
 
 インボイス登録番号については注意が必要である。領収書・請求書に印字されている
 登録番号は通常**取引先(相手方)**のものであり、これは自社を特定する情報ではない。
@@ -60,7 +64,11 @@ _PREFECTURES = (
     "熊本県", "大分県", "宮崎県", "鹿児島県", "沖縄県",
 )
 
-_PHONE_RE = re.compile(r"0\d{1,4}-\d{1,4}-\d{3,4}")
+# 区切りは、OCRがハイフンを重複して読む(「999--8888」)ことや、全角ダッシュ・
+# 空白で印字されることがあるため、1〜2文字のゆらぎを許容する。実機のOCR結果で
+# 「TEL045-999--8888」が検出できず自社の電話番号が黒塗りされない事象を確認済み。
+_PHONE_SEP = r"[-‐‑‒–—―ー−\s]{1,2}"
+_PHONE_RE = re.compile(rf"0\d{{1,4}}{_PHONE_SEP}\d{{1,4}}{_PHONE_SEP}\d{{3,4}}")
 # 前後を数字で挟まれていない「3桁-4桁」だけを郵便番号とみなす。境界を付けないと、
 # 「T 1234-567890123」のような長い数字列の一部にも一致してしまい、取引先の
 # インボイス登録番号の行まで黒塗りされてしまう。
@@ -91,18 +99,21 @@ def _contains_own_invoice_no(text: str, own_invoice_nos: "frozenset[str]") -> bo
     return any(no in normalized for no in own_invoice_nos)
 
 
-def _is_sensitive_line(text: str, own_invoice_nos: "frozenset[str]" = frozenset()) -> bool:
-    """自社(依頼主)を特定できる情報を含む行かどうかを判定する。
+def _is_addressee_line(text: str) -> bool:
+    return text.endswith(_ADDRESSEE_SUFFIXES)
 
-    own_invoice_nos には自社のインボイス登録番号を(正規化済みの形で)渡す。
-    取引先の登録番号は自社を特定する情報ではなく、摘要欄に必要な情報なので
-    黒塗りしない。
+
+def _has_address_or_contact(text: str) -> bool:
+    """住所・電話番号・郵便番号のいずれかを含む行か。
+
+    これらは「自社のものか取引先のものか」が文字だけでは区別できない。
+    レシートや領収証には支払先(店舗)の住所・電話が必ず印字されるため、
+    これだけを根拠に黒塗りすると取引先の情報まで消してしまう。
+    実際に、支払先の名称や住所が黒塗りされてインボイス番号が読み取りにくく
+    なる事象が起きたため、後述の「自社の情報が書かれている範囲」の中に
+    ある場合だけ黒塗りする。
     """
-    if text.endswith(_ADDRESSEE_SUFFIXES):
-        return True
     if _PHONE_RE.search(text):
-        return True
-    if _contains_own_invoice_no(text, own_invoice_nos):
         return True
     if _POSTAL_RE.search(text):
         return True
@@ -110,6 +121,11 @@ def _is_sensitive_line(text: str, own_invoice_nos: "frozenset[str]" = frozenset(
         return True
     if _ADDRESS_SUFFIX_RE.search(text):
         return True
+    return False
+
+
+def _has_account_info(text: str) -> bool:
+    """口座・カードに関する情報を含む行か(通帳・カード明細で使う)。"""
     if _BANK_NAME_RE.match(text):
         return True
     if _BRANCH_NAME_RE.match(text):
@@ -124,6 +140,88 @@ def _is_sensitive_line(text: str, own_invoice_nos: "frozenset[str]" = frozenset(
         return True
     if _CARD_NO_RE.search(text):
         return True
+    return False
+
+
+# 通帳・クレジットカード明細のように、書かれている口座・カード情報がそもそも
+# 自社のものである書類かどうかを判断するための手がかり。
+_ACCOUNT_DOCUMENT_HINTS = (
+    "通帳", "お預り金額", "お引出し", "差引残高", "繰越",
+    "ご利用代金明細", "カードご利用", "お支払い金額", "ご請求金額合計",
+)
+
+# 宛名(自社)から縦方向にこの割合の範囲内を「自社の情報が書かれている範囲」と
+# みなす。領収証・請求書では、宛名とその住所は近接して印字され、発行者(取引先)の
+# 住所・電話は離れた位置(下部や右側)に印字されるという体裁を利用する。
+#
+# 実際の領収証の体裁を再現して測ったところ、自社側は宛名から0.06〜0.12、
+# 発行者(支払先)側は0.66以上と、はっきり差が付いた。自社の情報を取りこぼす方が
+# 影響が大きいので、その間で自社側に余裕を持たせた値にしている。
+_OWN_BLOCK_VERTICAL_RATIO = 0.25
+
+
+def _box_center_y(box) -> float:
+    return sum(p[1] for p in box) / len(box)
+
+
+def looks_like_account_document(texts: "list[str]") -> bool:
+    """通帳・カード明細など、口座やカードの情報が自社のものである書類か。
+
+    レシートや領収証では「○○支店」が支払先の店舗名の一部だったり、振込先として
+    取引先の口座が書かれていたりするため、口座・カード関連の検出をそのまま
+    適用すると取引先の情報まで黒塗りしてしまう。
+    """
+    joined = "".join(texts)
+    return any(hint in joined for hint in _ACCOUNT_DOCUMENT_HINTS)
+
+
+def _own_block_centers(lines: "list[dict]") -> "list[float]":
+    """宛名行(自社宛)の縦位置。ここを起点に「自社の情報の範囲」を決める。"""
+    return [
+        _box_center_y(line["box"])
+        for line in lines
+        if _is_addressee_line(line["text"].strip())
+    ]
+
+
+def _is_in_own_block(box, own_centers: "list[float]", image_height: int) -> bool:
+    if not own_centers:
+        return False
+    limit = image_height * _OWN_BLOCK_VERTICAL_RATIO
+    y = _box_center_y(box)
+    return any(abs(y - c) <= limit for c in own_centers)
+
+
+def should_mask_line(
+    text: str,
+    *,
+    box,
+    own_centers: "list[float]",
+    image_height: int,
+    is_account_document: bool,
+    own_invoice_nos: "frozenset[str]" = frozenset(),
+) -> bool:
+    """この行を黒塗りすべきか判断する。
+
+    文字の見た目だけでは「自社の情報」か「取引先の情報」かを区別できないため、
+    書類の中での位置と種類も手がかりにする:
+
+    - 宛名(様/御中)と、自社と分かっている登録番号 → 常に黒塗り
+    - 住所・電話・郵便番号 → 宛名の近く(自社の情報が書かれている範囲)のみ
+      黒塗り。レシートや領収証に必ず印字される支払先の住所・電話を消さないため
+    - 口座・カード情報 → 通帳やカード明細のように、それが自社のものである書類か、
+      宛名の近くにある場合のみ黒塗り
+    """
+    if _is_addressee_line(text):
+        return True
+    if _contains_own_invoice_no(text, own_invoice_nos):
+        return True
+
+    in_own_block = _is_in_own_block(box, own_centers, image_height)
+    if _has_address_or_contact(text):
+        return in_own_block
+    if _has_account_info(text):
+        return is_account_document or in_own_block
     return False
 
 
@@ -149,12 +247,23 @@ def mask_addressee_lines(
     まま元画像相当の内容がそのまま渡ってしまう事故を防ぐため)。
     """
     lines = ocr.recognize_lines(image)
+    texts = [line["text"].strip() for line in lines]
+    own_centers = _own_block_centers(lines)
+    is_account_doc = looks_like_account_document(texts)
+
     masked = image.copy()
     draw = ImageDraw.Draw(masked)
     count = 0
     for line in lines:
         text = line["text"].strip()
-        if _is_sensitive_line(text, own_invoice_nos):
+        if should_mask_line(
+            text,
+            box=line["box"],
+            own_centers=own_centers,
+            image_height=image.height,
+            is_account_document=is_account_doc,
+            own_invoice_nos=own_invoice_nos,
+        ):
             xs = [p[0] for p in line["box"]]
             ys = [p[1] for p in line["box"]]
             x0, x1 = min(xs) - _PADDING, max(xs) + _PADDING
