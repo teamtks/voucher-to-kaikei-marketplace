@@ -17,6 +17,7 @@ GUIを起動せずにテストできる。
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tkinter as tk
@@ -221,6 +222,62 @@ def ensure_claude_md(project_dir: Path) -> bool:
     return True
 
 
+def _system_python() -> "Path | None":
+    """スキルフォルダの外にあるPythonを探す。
+
+    スキルの最新化は、入れ替え対象のフォルダの中にあるPython(venv)で実行すると
+    使用中のファイルを消せず失敗する。このランチャー自体がvenvのPythonで動いて
+    いるため、外側のPythonを明示的に探す。
+    """
+    skill_dir = Path(__file__).resolve().parent.parent
+    for name in ("python", "python3", "py"):
+        found = shutil.which(name)
+        if not found:
+            continue
+        candidate = Path(found).resolve()
+        try:
+            if not candidate.is_relative_to(skill_dir):
+                return candidate
+        except ValueError:
+            return candidate
+    return None
+
+
+def refresh_skill(timeout: int = 90) -> "tuple[bool, str]":
+    """作業を始める前に、スキルの内容をGitHub上の最新版に合わせる。
+
+    Claude自身にも最新化させているが、それはセッションが始まってからの実行に
+    なるため、反映されるのは次のセッションからだった。ここで先に済ませておけば、
+    これから開くセッションが最初から最新の内容で動く。
+
+    ネットワークが無い・GitHubに繋がらない等で失敗しても、作業自体は続けられる
+    ようにする(戻り値で知らせるだけで、起動は止めない)。
+    """
+    script = Path(__file__).resolve().parent / "refresh_marketplace_cache.py"
+    if not script.is_file():
+        return False, "最新化スクリプトが見つかりませんでした"
+
+    python = _system_python()
+    if python is None:
+        return False, "システムのPythonが見つかりませんでした"
+
+    try:
+        result = subprocess.run(
+            [str(python), str(script)],
+            capture_output=True, text=True, timeout=timeout,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except subprocess.TimeoutExpired:
+        return False, "最新化に時間がかかりすぎたため中断しました"
+    except OSError as e:
+        return False, f"最新化を実行できませんでした({e})"
+
+    output = (result.stdout or "").strip()
+    if result.returncode != 0:
+        return False, output or "最新化に失敗しました"
+    return True, output
+
+
 def build_claude_open_uri(folder: Path) -> str:
     """指定フォルダを作業ディレクトリにしてClaude Codeセッションを開くURI。"""
     encoded = urllib.parse.quote(str(folder), safe="")
@@ -392,8 +449,28 @@ def main() -> None:
 
     def on_start_work() -> None:
         project_dir = state["selected_project"]
-        if project_dir is not None:
-            open_project_in_claude(project_dir)
+        if project_dir is None:
+            return
+
+        # セッションを開く前にスキルを最新化する。ここで済ませておかないと、
+        # 反映されるのが次のセッションからになってしまう。
+        original_label = start_btn["text"]
+        start_btn.config(state="disabled", text="スキルを最新化しています…")
+        root_window.update()
+        try:
+            ok, message = refresh_skill()
+        finally:
+            start_btn.config(state="normal", text=original_label)
+
+        if not ok:
+            messagebox.showwarning(
+                "スキルを最新化できませんでした",
+                f"{message}\n\n"
+                "そのまま作業は始められますが、最新の機能が反映されていない可能性が"
+                "あります。繰り返し出る場合は担当者にこの内容を伝えてください。",
+            )
+
+        open_project_in_claude(project_dir)
 
     def on_new_project() -> None:
         root_folder = state["root_folder"]
