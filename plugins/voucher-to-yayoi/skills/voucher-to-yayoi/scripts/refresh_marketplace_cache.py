@@ -27,15 +27,40 @@ import subprocess
 import sys
 from pathlib import Path
 
-MARKETPLACE_NAME = "voucher-to-yayoi-marketplace"
 PLUGIN_NAME = "voucher-to-yayoi"
 
 # 別のPythonで自分を起動し直したときに、それ以上繰り返さないための目印
 _RELAUNCH_GUARD = "VOUCHER_TO_YAYOI_REFRESH_RELAUNCHED"
 
 HOME = Path.home()
-MARKETPLACE_DIR = HOME / ".claude" / "plugins" / "marketplaces" / MARKETPLACE_NAME
-CACHE_ROOT = HOME / ".claude" / "plugins" / "cache" / MARKETPLACE_NAME / PLUGIN_NAME
+PLUGINS_DIR = HOME / ".claude" / "plugins"
+
+
+def find_marketplace_dir() -> "Path | None":
+    """マーケットプレイスの複製フォルダを探す。
+
+    フォルダ名を決め打ちしてはいけない。marketplace.jsonに書かれた名前
+    (voucher-to-yayoi-marketplace)と、GitHubのリポジトリ名
+    (voucher-to-kaikei-marketplace)が異なるため、登録の仕方によってPC上の
+    フォルダ名がどちらにもなりうる。実際に、リポジトリ名で登録されていたPCで
+    「マーケットプレイス経由ではない」と誤判定し、更新が毎回何もせず終わって
+    いた事象が起きた。名前ではなく中身(このプラグインを含むか)で判断する。
+    """
+    root = PLUGINS_DIR / "marketplaces"
+    if not root.is_dir():
+        return None
+    for d in sorted(root.iterdir()):
+        if (d / ".git").is_dir() and (d / "plugins" / PLUGIN_NAME).is_dir():
+            return d
+    return None
+
+
+def find_cache_roots() -> "list[Path]":
+    """実際に読み込まれるキャッシュのフォルダを探す(同上の理由で名前に依存しない)。"""
+    root = PLUGINS_DIR / "cache"
+    if not root.is_dir():
+        return []
+    return [d / PLUGIN_NAME for d in sorted(root.iterdir()) if (d / PLUGIN_NAME).is_dir()]
 
 # Pythonの実行環境(venv)はキャッシュフォルダの中に作られるため、更新のたびに
 # 一緒に消えてしまう。作り直すには数分かかるうえネットワーク接続も要るので、
@@ -93,15 +118,29 @@ def _replace_skill_dir(src: Path, dest: Path) -> None:
         )
 
 
+def _is_inside_cache(path: Path) -> bool:
+    """そのパスが、入れ替え対象のキャッシュフォルダの中にあるか。"""
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return False
+    for cache_root in find_cache_roots():
+        try:
+            if resolved.is_relative_to(cache_root.resolve()):
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
 def _find_python_outside_cache() -> "Path | None":
     """入れ替え対象(キャッシュ)の外にあるPythonを探す。"""
-    cache_root = CACHE_ROOT.resolve()
     for name in ("python", "python3", "py"):
         found = shutil.which(name)
         if not found:
             continue
         candidate = Path(found).resolve()
-        if not candidate.is_relative_to(cache_root):
+        if not _is_inside_cache(candidate):
             return candidate
     return None
 
@@ -120,11 +159,7 @@ def _relaunch_outside_cache_if_needed() -> bool:
     """
     if os.environ.get(_RELAUNCH_GUARD):
         return False  # 既に切り替え済み。これ以上は繰り返さない
-    try:
-        running_python = Path(sys.executable).resolve()
-        if not running_python.is_relative_to(CACHE_ROOT.resolve()):
-            return False
-    except (OSError, ValueError):
+    if not _is_inside_cache(Path(sys.executable)):
         return False
 
     external = _find_python_outside_cache()
@@ -152,23 +187,24 @@ def main() -> None:
     if _relaunch_outside_cache_if_needed():
         return
 
-    if not (MARKETPLACE_DIR / ".git").is_dir():
+    marketplace_dir = find_marketplace_dir()
+    if marketplace_dir is None:
         print("マーケットプレイス経由のインストールではないため、確認をスキップします。")
         return
 
-    before = _run(["git", "rev-parse", "HEAD"], MARKETPLACE_DIR).stdout.strip()
+    before = _run(["git", "rev-parse", "HEAD"], marketplace_dir).stdout.strip()
 
-    fetch = _run(["git", "fetch", "origin"], MARKETPLACE_DIR)
+    fetch = _run(["git", "fetch", "origin"], marketplace_dir)
     if fetch.returncode != 0:
         print("最新情報の取得に失敗しました(ネットワーク未接続の可能性があります)。オフラインのまま続行します。")
         return
 
-    merge = _run(["git", "merge", "--ff-only", "origin/main"], MARKETPLACE_DIR)
+    merge = _run(["git", "merge", "--ff-only", "origin/main"], marketplace_dir)
     if merge.returncode != 0:
         print("内部クローンの状態が想定外のため、自動更新をスキップしました。")
         return
 
-    after = _run(["git", "rev-parse", "HEAD"], MARKETPLACE_DIR).stdout.strip()
+    after = _run(["git", "rev-parse", "HEAD"], marketplace_dir).stdout.strip()
 
     if before == after:
         print("スキルは既に最新の状態です。")
@@ -176,15 +212,16 @@ def main() -> None:
 
     print(f"新しいバージョンを検出しました({before[:7]} → {after[:7]})。内容を最新化します。")
 
-    src = MARKETPLACE_DIR / "plugins" / PLUGIN_NAME / "skills" / PLUGIN_NAME
-    if not src.is_dir() or not CACHE_ROOT.is_dir():
+    src = marketplace_dir / "plugins" / PLUGIN_NAME / "skills" / PLUGIN_NAME
+    cache_roots = find_cache_roots()
+    if not src.is_dir() or not cache_roots:
         print("キャッシュフォルダがまだ無いため、内容のコピーはスキップしました。")
         return
 
     running_python = Path(sys.executable).resolve()
 
     updated_any = False
-    for version_dir in CACHE_ROOT.iterdir():
+    for version_dir in [v for root in cache_roots for v in sorted(root.iterdir())]:
         if not version_dir.is_dir():
             continue
         dest = version_dir / "skills" / PLUGIN_NAME

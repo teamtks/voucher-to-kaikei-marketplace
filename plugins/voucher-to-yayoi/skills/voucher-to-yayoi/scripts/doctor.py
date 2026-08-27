@@ -22,13 +22,27 @@ import subprocess
 import sys
 from pathlib import Path
 
-MARKETPLACE_NAME = "voucher-to-yayoi-marketplace"
 PLUGIN_NAME = "voucher-to-yayoi"
 
 HOME = Path.home()
 CLAUDE_DIR = HOME / ".claude"
-MARKETPLACE_DIR = CLAUDE_DIR / "plugins" / "marketplaces" / MARKETPLACE_NAME
-CACHE_ROOT = CLAUDE_DIR / "plugins" / "cache" / MARKETPLACE_NAME / PLUGIN_NAME
+
+# フォルダ名を決め打ちしない。marketplace.jsonの名前
+# (voucher-to-yayoi-marketplace)とGitHubのリポジトリ名
+# (voucher-to-kaikei-marketplace)が異なるため、登録の仕方によってPC上の
+# フォルダ名がどちらにもなりうる。実際に、リポジトリ名で登録されていたPCで
+# 「マーケットプレイス経由ではない」と誤判定した。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from refresh_marketplace_cache import find_cache_roots, find_marketplace_dir
+
+
+MARKETPLACE_DIR = find_marketplace_dir()
+CACHE_ROOTS = find_cache_roots()
+# 「見つからなかった」場合でもパス連結の記述が壊れないよう、置き場所だけ用意する
+_MISSING = CLAUDE_DIR / "plugins" / "(見つかりません)"
+if MARKETPLACE_DIR is None:
+    MARKETPLACE_DIR = _MISSING
+CACHE_ROOT = CACHE_ROOTS[0] if CACHE_ROOTS else _MISSING
 
 _RELAUNCH_GUARD = "VOUCHER_TO_YAYOI_DOCTOR_RELAUNCHED"
 
