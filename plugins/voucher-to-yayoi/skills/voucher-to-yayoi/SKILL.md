@@ -28,10 +28,15 @@ Claudeに渡すのではなく、宛名部分だけをローカルで黒塗り�
 こと**。インストール方法によって場所が変わる:
 
 - **マーケットプレイス経由でインストールされている場合**:
-  `<ユーザーのホームフォルダ>\.claude\plugins\cache\voucher-to-yayoi-marketplace\voucher-to-yayoi\<バージョン番号>\skills\voucher-to-yayoi\`
-  (バージョン番号のフォルダ名は環境ごとに異なるため、`refresh_marketplace_cache.py`を
-  探すなどして実際の値を特定すること。例:
-  `Get-ChildItem -Recurse -Filter refresh_marketplace_cache.py "$HOME\.claude\plugins\cache"`)
+  `<ユーザーのホームフォルダ>\.claude\plugins\cache\<マーケットプレイス名>\voucher-to-yayoi\<バージョン番号>\skills\voucher-to-yayoi\`
+  **`<マーケットプレイス名>`も`<バージョン番号>`も環境ごとに異なる。どちらも推測で
+  組み立ててはならず、必ず次のコマンドで実際の場所を探すこと**:
+  `Get-ChildItem -Recurse -Filter refresh_marketplace_cache.py "$HOME\.claude\plugins\cache"`
+  (マーケットプレイス名は、`marketplace.json`に書かれた名前`voucher-to-yayoi-marketplace`
+  のこともあれば、GitHubのリポジトリ名`voucher-to-kaikei-marketplace`のこともある。
+  登録の仕方によって変わり、実際にこの取り違えでスキルが古いまま止まったPCがあった。
+  バージョン番号のフォルダ名も、最初にインストールした時の番号のまま変わらないため
+  当てにならない。)
 - **このスキルフォルダを直接使っている場合**: `<ユーザーのホームフォルダ>\.claude\skills\voucher-to-yayoi\`
 
 特定できたら、以降このドキュメント内で`scripts\...`と書かれている箇所はすべて
