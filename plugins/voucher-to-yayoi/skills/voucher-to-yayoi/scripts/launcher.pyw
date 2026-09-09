@@ -22,6 +22,7 @@ import subprocess
 import sys
 import tkinter as tk
 import urllib.parse
+from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog
 
@@ -309,6 +310,34 @@ def refresh_skill(timeout: int = 90) -> "tuple[bool, str]":
     return True, output
 
 
+LAST_OPEN_RECORD = Path.home() / ".claude" / "voucher-to-yayoi-last-open.json"
+
+
+def record_last_open(folder: Path) -> None:
+    """これから開こうとしている案件フォルダを控えておく。
+
+    `claude://code/new?folder=...`は、まれにフォルダ指定が失われ、案件フォルダでは
+    なく一時作業領域(scratch-workspaces)でセッションが開かれることがある
+    (実機で、29件中2件の発生を確認。アプリは起動済みで、こちらからは防げない)。
+    そうなるとCLAUDE.mdも証憑書類フォルダも読めず、Claudeは「対象ファイルが無い」
+    としか言えなくなる。
+
+    ここに控えておけば、スキル側が「どの案件を開こうとしたのか」を名指しして
+    開き直しを案内できる。失敗しても起動は妨げない。
+    """
+    try:
+        LAST_OPEN_RECORD.parent.mkdir(parents=True, exist_ok=True)
+        LAST_OPEN_RECORD.write_text(
+            json.dumps(
+                {"project": str(folder), "opened_at": datetime.now().isoformat(timespec="seconds")},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
 def build_claude_open_uri(folder: Path) -> str:
     """指定フォルダを作業ディレクトリにしてClaude Codeセッションを開くURI。"""
     encoded = urllib.parse.quote(str(folder), safe="")
@@ -317,6 +346,7 @@ def build_claude_open_uri(folder: Path) -> str:
 
 def open_project_in_claude(folder: Path) -> None:
     ensure_project_structure(folder)
+    record_last_open(folder)
     uri = build_claude_open_uri(folder)
     os.startfile(uri)
 
