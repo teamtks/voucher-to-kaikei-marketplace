@@ -222,6 +222,30 @@ def ensure_claude_md(project_dir: Path) -> bool:
     return True
 
 
+def ensure_project_structure(project_dir: Path) -> "list[str]":
+    """案件フォルダに、必要な下位フォルダとCLAUDE.mdを揃える。
+
+    「＋新規プロジェクト」で作った案件には create_project() が一式を付けるが、
+    既にあったフォルダを「置き場所を変更」で後から取り込んだ場合はそこを通らない。
+    その結果「証憑書類」「参考資料ファイル」が無いまま作業が始まり、Claudeが
+    「資料がありません」「フォルダを指定してください」と言い出す事象が実際に起きた
+    (CLAUDE.mdについては同じ不具合を先に直したが、下位フォルダが漏れていた)。
+    案件を開くたびに毎回補う。
+
+    作るのは空のフォルダとひな形だけで、既にあるものの中身には一切触れない。
+    戻り値は、今回新たに作ったものの名前。
+    """
+    created = []
+    for sub in (VOUCHER_SUBFOLDER, REFERENCE_SUBFOLDER):
+        subdir = project_dir / sub
+        if not subdir.is_dir():
+            subdir.mkdir(parents=True, exist_ok=True)
+            created.append(sub)
+    if ensure_claude_md(project_dir):
+        created.append("CLAUDE.md")
+    return created
+
+
 def _system_python() -> "Path | None":
     """スキルフォルダの外にあるPythonを探す。
 
@@ -285,7 +309,7 @@ def build_claude_open_uri(folder: Path) -> str:
 
 
 def open_project_in_claude(folder: Path) -> None:
-    ensure_claude_md(folder)
+    ensure_project_structure(folder)
     uri = build_claude_open_uri(folder)
     os.startfile(uri)
 
