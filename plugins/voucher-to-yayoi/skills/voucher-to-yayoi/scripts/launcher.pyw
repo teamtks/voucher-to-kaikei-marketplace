@@ -257,9 +257,10 @@ def ensure_project_structure(project_dir: Path) -> "list[str]":
 def _system_python() -> "Path | None":
     """スキルフォルダの外にあるPythonを探す。
 
-    スキルの最新化は、入れ替え対象のフォルダの中にあるPython(venv)で実行すると
-    使用中のファイルを消せず失敗する。このランチャー自体がvenvのPythonで動いて
-    いるため、外側のPythonを明示的に探す。
+    このランチャー自体はスキルフォルダ内のvenvのPythonで動いている。そのPythonを
+    外部の仕組み(黒塗りの安全装置のフック等)に使わせると、スキルを入れ替えた
+    ときに使用中で消せなかったり、置き場所が変わって動かなくなったりするため、
+    外側のPythonを明示的に探す。
     """
     skill_dir = Path(__file__).resolve().parent.parent
     for name in ("python", "python3", "py"):
@@ -275,6 +276,9 @@ def _system_python() -> "Path | None":
     return None
 
 
+# >>> Git版のみ: 自動最新化
+# この目印で囲んだ範囲は、Git非依存の配布キットを作るときに丸ごと取り除かれる
+# (キット再作成.py)。キットでも必要な処理を、この範囲の中に置かないこと。
 def refresh_skill(timeout: int = 90) -> "tuple[bool, str]":
     """作業を始める前に、スキルの内容をGitHub上の最新版に合わせる。
 
@@ -308,6 +312,169 @@ def refresh_skill(timeout: int = 90) -> "tuple[bool, str]":
     if result.returncode != 0:
         return False, output or "最新化に失敗しました"
     return True, output
+# <<< Git版のみ: 自動最新化
+
+
+class _SettingsError(Exception):
+    """利用者の設定ファイルを、安全に書き換えられなかったことを表す。"""
+
+
+def _edit_user_settings(edit) -> bool:
+    """利用者の設定ファイル(~/.claude/settings.json)を、壊さずに書き換える。
+
+    そこには他のフックや権限設定も入っているため、次の手順を必ず守る:
+      - 読めない・形式が違うときは、一切書き換えずに中止する
+      - 初回の書き換え前に控えを取る
+      - 別ファイルに書いてから差し替える(書き換え途中で落ちても壊れない)
+
+    edit(settings) は設定を直接書き換え、変更したときだけTrueを返す。形式が想定と
+    違う場合は _SettingsError を投げてよい。戻り値は実際に書き込んだかどうか。
+    """
+    try:
+        settings = (
+            json.loads(USER_SETTINGS.read_text(encoding="utf-8-sig")) if USER_SETTINGS.is_file() else {}
+        )
+    except (OSError, ValueError) as e:
+        raise _SettingsError(f"設定ファイルを読めません: {e}") from e
+    if not isinstance(settings, dict):
+        raise _SettingsError("設定ファイルの形式が想定と異なります")
+
+    if not edit(settings):
+        return False
+
+    try:
+        if USER_SETTINGS.is_file():
+            backup = USER_SETTINGS.with_name("settings.json.bak_voucher-to-yayoi")
+            if not backup.exists():
+                shutil.copyfile(USER_SETTINGS, backup)
+        USER_SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+        tmp = USER_SETTINGS.with_name("settings.json.tmp_voucher-to-yayoi")
+        tmp.write_text(json.dumps(settings, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, USER_SETTINGS)
+    except OSError as e:
+        raise _SettingsError(f"設定ファイルを書き換えられません: {e}") from e
+    return True
+
+
+def skill_access_root() -> Path:
+    """Claude Codeに「作業フォルダ」として登録する、スキルの置き場所。
+
+    プラグインとして配布された場合、スキルは
+        ~/.claude/plugins/cache/<配布元>/voucher-to-yayoi/<版>/skills/voucher-to-yayoi
+    に置かれ、<版>のフォルダ名は更新のたびに変わる。版のフォルダを登録すると更新の
+    たびに古くなるため、版の1つ上(このプラグインのフォルダ)を登録する。
+    ~/.claude/skills に直接置かれている場合は、そのフォルダ自体を登録する。
+    """
+    skill_dir = Path(__file__).resolve().parent.parent
+    plugin_dir = skill_dir.parents[2]
+    looks_like_plugin = (
+        skill_dir.parent.name == "skills"
+        and plugin_dir.name == skill_dir.name
+        and "cache" in (p.name for p in plugin_dir.parents)
+    )
+    return plugin_dir if looks_like_plugin else skill_dir
+
+
+def register_skill_dir() -> "str | None":
+    """スキルの置き場所を、Claude Codeの作業フォルダとして登録する。
+
+    スキルの本体は案件フォルダの外にある。Claude Codeは作業フォルダの外を初めて
+    読むときに確認を出し、自動モードの安全機能は外部での実行を止める。3回続けて
+    止めると自動モードは手動に戻る。これが「仕訳を切って」と言った直後に「その他の
+    フォルダ」の確認が出て、自動モードが手動に戻る症状の正体だった(ローカル版の
+    利用先で実際に発生)。
+
+    permissions.additionalDirectories に登録したフォルダは、元の作業フォルダと
+    同じ扱いになり確認なしで読める(公式ドキュメントに明記)。登録するのは読み取りの
+    許可だけで、そのフォルダの設定は読み込まれない。
+
+    既に登録済みなら何もしない。失敗したときだけ、利用者に伝える文言を返す。
+    """
+    root = skill_access_root()
+    wanted = os.path.normcase(os.path.normpath(str(root)))
+
+    def add(settings: dict) -> bool:
+        permissions = settings.setdefault("permissions", {})
+        if not isinstance(permissions, dict):
+            raise _SettingsError("設定ファイルの形式が想定と異なります")
+        dirs = permissions.setdefault("additionalDirectories", [])
+        if not isinstance(dirs, list):
+            raise _SettingsError("設定ファイルの形式が想定と異なります")
+        # Windowsのパスは大文字小文字を区別しない。表記揺れで二重登録しないよう揃えて比べる
+        if any(isinstance(d, str) and os.path.normcase(os.path.normpath(d)) == wanted for d in dirs):
+            return False
+        dirs.append(str(root))
+        return True
+
+    try:
+        _edit_user_settings(add)
+    except _SettingsError as e:
+        return f"スキルの置き場所を登録できませんでした({e})"
+    return None
+
+
+HOOK_SOURCE = Path(__file__).resolve().parent / "hooks" / "block_unmasked_vouchers.py"
+HOOK_INSTALLED = Path.home() / ".claude" / "hooks" / "block_unmasked_vouchers.py"
+USER_SETTINGS = Path.home() / ".claude" / "settings.json"
+HOOK_MARK = "block_unmasked_vouchers"
+
+
+def install_masking_guard() -> "str | None":
+    """黒塗りしていない証憑の読み取りを拒否する安全装置を、このPCに有効化する。
+
+    黒塗りの決まりはSKILL.mdとCLAUDE.mdの両方に書いてあったが、実際に破られた。
+    別のスキルが選ばれた時点で指示文は効かないため、読み取り自体を拒否する
+    仕組み(PreToolUseフック)に置き換える。
+
+    スキル本体は更新のたびに置き場所が変わりうるので、フックの本体は
+    `~/.claude/hooks/`へ複製し、設定はそこを指す。毎回の起動で複製を上書きする
+    ため、スキルを更新すればフックも一緒に新しくなる。
+
+    既に登録済みの場合は何もしない。利用者の他のフック設定には触れない。
+    戻り値は、利用者に知らせるべきことがあればその文言。
+    """
+    if not HOOK_SOURCE.is_file():
+        return None
+    try:
+        HOOK_INSTALLED.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(HOOK_SOURCE, HOOK_INSTALLED)
+    except OSError as e:
+        return f"黒塗りの安全装置を配置できませんでした({e})"
+
+    python = _system_python()
+    if python is None:
+        return "黒塗りの安全装置を登録できませんでした(Pythonが見つかりません)"
+
+    def add(settings: dict) -> bool:
+        hooks = settings.setdefault("hooks", {})
+        if not isinstance(hooks, dict):
+            raise _SettingsError("設定ファイルの形式が想定と異なります")
+        pre = hooks.setdefault("PreToolUse", [])
+        if not isinstance(pre, list):
+            raise _SettingsError("設定ファイルの形式が想定と異なります")
+        if HOOK_MARK in json.dumps(pre, ensure_ascii=False):
+            return False  # 既に登録済み
+        pre.append({
+            "matcher": "Read",
+            "hooks": [{
+                "type": "command",
+                "command": f'"{python}" "{HOOK_INSTALLED}"',
+                "timeout": 15,
+                "statusMessage": "証憑が黒塗り済みか確認中...",
+            }],
+        })
+        return True
+
+    try:
+        added = _edit_user_settings(add)
+    except _SettingsError as e:
+        return f"黒塗りの安全装置を登録できませんでした({e})"
+    if not added:
+        return None
+    return (
+        "黒塗りしていない証憑の読み取りを止める安全装置を、このPCに追加しました。\n\n"
+        "以後、黒塗り前の証憑を読み取ろうとすると自動的に止まります。"
+    )
 
 
 LAST_OPEN_RECORD = Path.home() / ".claude" / "voucher-to-yayoi-last-open.json"
@@ -318,7 +485,8 @@ def record_last_open(folder: Path) -> None:
 
     `claude://code/new?folder=...`は、まれにフォルダ指定が失われ、案件フォルダでは
     なく一時作業領域(scratch-workspaces)でセッションが開かれることがある
-    (実機で、29件中2件の発生を確認。アプリは起動済みで、こちらからは防げない)。
+    (実機で、9月に始まったセッション19件中12件で発生。アプリは起動済みで、
+    こちらからは防げない)。
     そうなるとCLAUDE.mdも証憑書類フォルダも読めず、Claudeは「対象ファイルが無い」
     としか言えなくなる。
 
@@ -513,6 +681,7 @@ def main() -> None:
         if project_dir is None:
             return
 
+        # >>> Git版のみ: 自動最新化
         # セッションを開く前にスキルを最新化する。ここで済ませておかないと、
         # 反映されるのが次のセッションからになってしまう。
         original_label = start_btn["text"]
@@ -530,6 +699,22 @@ def main() -> None:
                 "そのまま作業は始められますが、最新の機能が反映されていない可能性が"
                 "あります。繰り返し出る場合は担当者にこの内容を伝えてください。",
             )
+        # <<< Git版のみ: 自動最新化
+
+        # 以下はGit版・配布キットの両方で必要。セッションを開く前に済ませること
+        # (設定はセッション開始時に読み込まれるため、開いた後では効かない)。
+
+        # 黒塗りしていない証憑を読めないようにする。スキルの最新化の後に行うことで、
+        # 更新された安全装置がそのまま反映される。
+        guard_notice = install_masking_guard()
+        if guard_notice:
+            messagebox.showinfo("安全装置について", guard_notice)
+
+        # スキルの置き場所を作業フォルダとして登録する。無いと、作業を始めた直後に
+        # 「その他のフォルダ」の確認が出て、自動モードが手動に戻ってしまう。
+        dir_notice = register_skill_dir()
+        if dir_notice:
+            messagebox.showwarning("設定について", dir_notice)
 
         open_project_in_claude(project_dir)
 
