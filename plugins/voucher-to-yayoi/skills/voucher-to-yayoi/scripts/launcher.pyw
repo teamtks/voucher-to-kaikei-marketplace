@@ -390,8 +390,38 @@ def register_skill_dir() -> "str | None":
 
     既に登録済みなら何もしない。失敗したときだけ、利用者に伝える文言を返す。
     """
-    root = skill_access_root()
-    wanted = os.path.normcase(os.path.normpath(str(root)))
+    try:
+        _register_additional_dir(skill_access_root())
+    except _SettingsError as e:
+        return f"スキルの置き場所を登録できませんでした({e})"
+    return None
+
+
+def register_case_root() -> "str | None":
+    """案件フォルダをまとめて置いている場所を、Claude Codeの作業フォルダとして登録する。
+
+    利用先のPCによっては、ランチャーから開いたセッションの案件フォルダが、最初の
+    送信のときに外れて「フォルダなし」になる(アプリ側の挙動で、こちらでは再現も
+    防止もできない)。そのままでは案件フォルダが作業フォルダの外になり、読むたびに
+    確認が出て、自動モードも手動に戻ってしまう。案件フォルダの親を登録しておけば、
+    フォルダが外れても、確認なしで本来の案件フォルダを読み書きして作業を続けられる
+    (どの案件かは、ランチャーが入力欄に入れる【案件: 名前】で判断する)。
+
+    置き場所がまだ決まっていなければ何もしない。失敗したときだけ文言を返す。
+    """
+    root = get_root_folder()
+    if root is None:
+        return None
+    try:
+        _register_additional_dir(root)
+    except _SettingsError as e:
+        return f"案件フォルダの置き場所を登録できませんでした({e})"
+    return None
+
+
+def _register_additional_dir(folder: Path) -> bool:
+    """permissions.additionalDirectories に1つ加える。加えたらTrue、登録済みならFalse。"""
+    wanted = os.path.normcase(os.path.normpath(str(folder)))
 
     def add(settings: dict) -> bool:
         permissions = settings.setdefault("permissions", {})
@@ -403,14 +433,10 @@ def register_skill_dir() -> "str | None":
         # Windowsのパスは大文字小文字を区別しない。表記揺れで二重登録しないよう揃えて比べる
         if any(isinstance(d, str) and os.path.normcase(os.path.normpath(d)) == wanted for d in dirs):
             return False
-        dirs.append(str(root))
+        dirs.append(str(folder))
         return True
 
-    try:
-        _edit_user_settings(add)
-    except _SettingsError as e:
-        return f"スキルの置き場所を登録できませんでした({e})"
-    return None
+    return _edit_user_settings(add)
 
 
 HOOK_SOURCE = Path(__file__).resolve().parent / "hooks" / "block_unmasked_vouchers.py"
@@ -506,10 +532,40 @@ def record_last_open(folder: Path) -> None:
         pass
 
 
+CASE_MARKER_PREFIX = "【案件: "
+CASE_MARKER_SUFFIX = "】"
+
+# 入力欄の先頭に案件名の目印を入れるかどうか。職員のPC(この版)では入れない。
+# 目印が要るのは、最初の送信で案件フォルダが外れる現象が起きる配布先だけで、
+# 職員には不要との判断(利用者の指示)。配布キットを作るときに、キット再作成.py が
+# この行を True に書き換える。
+CASE_MARKER_IN_PROMPT = False
+
+
+def case_marker(folder: Path) -> str:
+    """入力欄の先頭に入れておく、案件名の目印。
+
+    利用先のPCによっては、最初の送信のときに案件フォルダが外れ、セッションが
+    「フォルダなし」になる。控えのファイル(最後に開いた案件)だけでは、案件を
+    続けて開いたときに後のもので上書きされ、先に開いたセッションで別の顧問先の
+    仕訳を作ってしまいかねない。送信する文章そのものに案件名を残せば、フォルダが
+    外れても、セッションごとに正しい案件が必ず分かる。利用者はこの後ろに、
+    これまでどおり依頼を書けばよい。
+    """
+    return f"{CASE_MARKER_PREFIX}{folder.name}{CASE_MARKER_SUFFIX}\n"
+
+
 def build_claude_open_uri(folder: Path) -> str:
-    """指定フォルダを作業ディレクトリにしてClaude Codeセッションを開くURI。"""
+    """指定フォルダを作業ディレクトリにしてClaude Codeセッションを開くURI。
+
+    folder を先頭に置く。入力欄への事前入力(q)は、フォルダの受け渡しとは独立に
+    届くことを実機で確認済み。目印は配布キットでだけ入れる(CASE_MARKER_IN_PROMPT)。
+    """
     encoded = urllib.parse.quote(str(folder), safe="")
-    return f"claude://code/new?folder={encoded}"
+    uri = f"claude://code/new?folder={encoded}"
+    if CASE_MARKER_IN_PROMPT:
+        uri += "&q=" + urllib.parse.quote(case_marker(folder), safe="")
+    return uri
 
 
 def open_project_in_claude(folder: Path) -> None:
@@ -710,11 +766,13 @@ def main() -> None:
         if guard_notice:
             messagebox.showinfo("安全装置について", guard_notice)
 
-        # スキルの置き場所を作業フォルダとして登録する。無いと、作業を始めた直後に
-        # 「その他のフォルダ」の確認が出て、自動モードが手動に戻ってしまう。
-        dir_notice = register_skill_dir()
-        if dir_notice:
-            messagebox.showwarning("設定について", dir_notice)
+        # スキルの置き場所と、案件フォルダの置き場所を作業フォルダとして登録する。
+        # 無いと、作業を始めた直後に「その他のフォルダ」の確認が出て、自動モードが
+        # 手動に戻ってしまう(案件フォルダが外れて「フォルダなし」になったPCでも、
+        # 後者があれば本来の案件フォルダで作業を続けられる)。
+        for dir_notice in (register_skill_dir(), register_case_root()):
+            if dir_notice:
+                messagebox.showwarning("設定について", dir_notice)
 
         open_project_in_claude(project_dir)
 
