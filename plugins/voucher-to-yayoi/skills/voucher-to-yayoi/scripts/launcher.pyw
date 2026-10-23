@@ -535,12 +535,6 @@ def record_last_open(folder: Path) -> None:
 CASE_MARKER_PREFIX = "【案件: "
 CASE_MARKER_SUFFIX = "】"
 
-# 入力欄の先頭に案件名の目印を入れるかどうか。職員のPC(この版)では入れない。
-# 目印が要るのは、最初の送信で案件フォルダが外れる現象が起きる配布先だけで、
-# 職員には不要との判断(利用者の指示)。配布キットを作るときに、キット再作成.py が
-# この行を True に書き換える。
-CASE_MARKER_IN_PROMPT = False
-
 
 def case_marker(folder: Path) -> str:
     """入力欄の先頭に入れておく、案件名の目印。
@@ -559,13 +553,15 @@ def build_claude_open_uri(folder: Path) -> str:
     """指定フォルダを作業ディレクトリにしてClaude Codeセッションを開くURI。
 
     folder を先頭に置く。入力欄への事前入力(q)は、フォルダの受け渡しとは独立に
-    届くことを実機で確認済み。目印は配布キットでだけ入れる(CASE_MARKER_IN_PROMPT)。
+    届くことを実機で確認済み。
+
+    目印は、当初は配布先だけに入れていたが、職員のPCでもフォルダが外れる症状が
+    出たため、すべての版で入れる(利用者の指示)。目印が無いと、外れたときに
+    「この案件でよいか」の確認を挟まないと戻せない。
     """
     encoded = urllib.parse.quote(str(folder), safe="")
-    uri = f"claude://code/new?folder={encoded}"
-    if CASE_MARKER_IN_PROMPT:
-        uri += "&q=" + urllib.parse.quote(case_marker(folder), safe="")
-    return uri
+    marker = urllib.parse.quote(case_marker(folder), safe="")
+    return f"claude://code/new?folder={encoded}&q={marker}"
 
 
 def open_project_in_claude(folder: Path) -> None:
