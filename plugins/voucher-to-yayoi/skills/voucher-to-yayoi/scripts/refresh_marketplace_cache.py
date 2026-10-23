@@ -118,13 +118,61 @@ def _replace_skill_dir(src: Path, dest: Path) -> None:
         )
 
 
+# 職員のPCでClaudeに読ませる、こちらで管理するスキルの置き場所。
+#
+# Claude Desktopは、プラグインとして入れたスキルを自分の管理する場所
+# (%LOCALAPPDATA%\Claude-Data\...\rpm\...)に置き、そこから読む。そこは上の
+# キャッシュとは別で、この更新処理が一度も触れていなかったため、職員のClaudeは
+# 7月16日のSKILL.mdで動き続けていた(実機で確認。確認ツールもそこを見ておらず
+# 「最新」と表示していた)。番号の付かないこの場所に置き、ここを最新に保つ。
+#
+# ただし、この場所は開発用PCでは手で修正を加える作業場所でもある。上書きして
+# 作業中の修正を失わないよう、移行ツールが印のファイルを置いた場合だけ更新する。
+MANAGED_SKILL_DIR = HOME / ".claude" / "skills" / PLUGIN_NAME
+MANAGED_MARK = ".teamtks-managed"
+
+
+def managed_skill_dir() -> "Path | None":
+    """更新してよい職員用コピーがあればその場所。開発用の手置きならNone。"""
+    if (MANAGED_SKILL_DIR / MANAGED_MARK).is_file():
+        return MANAGED_SKILL_DIR
+    return None
+
+
+def sync_managed_skill(src: Path, head: str) -> "str | None":
+    """職員用コピーを、内部クローンの内容(head)に合わせる。
+
+    GitHubの更新があったときだけでなく、毎回確かめる。内部クローンは最新でも、
+    職員用コピーだけ遅れていることがある(移行の途中で止まった場合など)。
+    戻り値は利用者に伝える文言(何もしなかった場合はNone)。
+    """
+    dest = managed_skill_dir()
+    if dest is None or not src.is_dir():
+        return None
+    mark = dest / MANAGED_MARK
+    if mark.read_text(encoding="utf-8").strip() == head:
+        return None
+    try:
+        if Path(sys.executable).resolve().is_relative_to(dest.resolve()):
+            return (
+                f"更新をスキップしました: {dest}\n"
+                "  このスクリプトを、入れ替え対象のフォルダ内にあるPythonで実行しているためです。"
+            )
+    except (OSError, ValueError):
+        pass
+    _replace_skill_dir(src, dest)  # 中身を丸ごと入れ替える(印のファイルも消える)
+    (dest / MANAGED_MARK).write_text(head + "\n", encoding="utf-8")
+    return f"最新化しました: {dest}"
+
+
 def _is_inside_cache(path: Path) -> bool:
-    """そのパスが、入れ替え対象のキャッシュフォルダの中にあるか。"""
+    """そのパスが、入れ替え対象のフォルダ(キャッシュ・職員用コピー)の中にあるか。"""
     try:
         resolved = path.resolve()
     except OSError:
         return False
-    for cache_root in find_cache_roots():
+    managed = managed_skill_dir()
+    for cache_root in find_cache_roots() + ([managed] if managed else []):
         try:
             if resolved.is_relative_to(cache_root.resolve()):
                 return True
@@ -205,6 +253,12 @@ def main() -> None:
         return
 
     after = _run(["git", "rev-parse", "HEAD"], marketplace_dir).stdout.strip()
+    src = marketplace_dir / "plugins" / PLUGIN_NAME / "skills" / PLUGIN_NAME
+
+    # 職員用コピーは、GitHubの更新の有無にかかわらず毎回確かめる
+    managed_notice = sync_managed_skill(src, after)
+    if managed_notice:
+        print(managed_notice)
 
     if before == after:
         print("スキルは既に最新の状態です。")
@@ -212,7 +266,6 @@ def main() -> None:
 
     print(f"新しいバージョンを検出しました({before[:7]} → {after[:7]})。内容を最新化します。")
 
-    src = marketplace_dir / "plugins" / PLUGIN_NAME / "skills" / PLUGIN_NAME
     cache_roots = find_cache_roots()
     if not src.is_dir() or not cache_roots:
         print("キャッシュフォルダがまだ無いため、内容のコピーはスキップしました。")

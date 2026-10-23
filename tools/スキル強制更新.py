@@ -40,6 +40,11 @@ CLAUDE_DIR = Path.home() / ".claude"
 # 「修復はありません」で終わると次に何をすればよいか分からないため、検出して伝える。
 APPDATA_CLAUDE = Path(os.environ.get("APPDATA", "")) / "Claude"
 
+# Claude Desktopが、プラグインとして入れたスキルを自分で管理する場所。職員の
+# Claudeは実際にはここのSKILL.mdを読んでいたが、以前のこの道具はここを見ておらず、
+# 7月16日の版のまま止まっていたのに「すべて最新」と表示していた。
+APP_MANAGED_ROOT = Path(os.environ.get("LOCALAPPDATA", "")) / "Claude-Data"
+
 
 def find_marketplace_dir():
     """マーケットプレイスの複製フォルダを探す。
@@ -121,6 +126,9 @@ def find_skill_mds() -> "list[Path]":
         md = skill_dir / "SKILL.md"
         if md.is_file():
             found.append(md)
+    # アプリが自分で管理する場所も拾う(職員のClaudeが実際に読んでいた場所)
+    if APP_MANAGED_ROOT.is_dir():
+        found.extend(p for p in APP_MANAGED_ROOT.rglob(f"skills/{PLUGIN_NAME}/SKILL.md") if p.is_file())
     return sorted(set(found))
 
 
@@ -224,6 +232,11 @@ def diagnose() -> None:
     print()
     if ref and stale:
         print("  「！古」が付いた場所は、GitHubの最新版と内容が違います。")
+        if any(APP_MANAGED_ROOT in p.parents for p in stale):
+            print()
+            print("  ！ アプリが管理する場所(Claude-Data)に古いスキルがあります。")
+            print("     Claudeはここを読んでいる可能性が高く、--repair では直りません。")
+            print("     tools/スキル移行.py を実行して、最新版が読まれる形に移してください。")
     elif ref and found:
         print("  すべて最新の内容です。")
 

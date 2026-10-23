@@ -6,6 +6,7 @@
 使い方:
     python setup_launcher.py
 """
+import shutil
 import sys
 from pathlib import Path
 
@@ -18,10 +19,27 @@ _OLD_SHORTCUT_NAMES = ("証憑仕訳処理.lnk",)  # 旧名称。残っていれ
 
 
 def find_pythonw() -> Path:
+    """ランチャーを起動するpythonw.exe。スキルのフォルダの外にあるものを優先する。
+
+    ランチャーは作業を始めるたびにスキルを最新化する。スキルの中のPython(.venv)で
+    ランチャーが動いていると、そのフォルダが使用中になり、入れ替えに失敗する。
+    """
+    skill_dir = Path(__file__).resolve().parent.parent
+    candidates = []
+    found = shutil.which("pythonw")
+    if found:
+        candidates.append(Path(found))
+    candidates.append(Path(sys.executable).parent / "pythonw.exe")
+    for c in candidates:
+        try:
+            c = c.resolve()
+            if c.is_file() and not c.is_relative_to(skill_dir):
+                return c
+        except (OSError, ValueError):
+            continue
+    # 外に見つからなければ、従来どおり手元のものを使う(起動できないよりはよい)
     venv_pythonw = Path(sys.executable).parent / "pythonw.exe"
-    if venv_pythonw.is_file():
-        return venv_pythonw
-    return Path(sys.executable)
+    return venv_pythonw if venv_pythonw.is_file() else Path(sys.executable)
 
 
 def create_desktop_shortcut() -> Path:
