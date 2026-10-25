@@ -22,10 +22,13 @@
   4. アプリ管理の場所に残っている古いスキルを探して知らせる(消さない)
 
   開発用PCのように、手作業で置いたスキルが既にある場合は、上書きせずに止まる。
+  職員のPCで置き換えてよい場合は --replace を付ける(元のスキルは消さずに
+  ~/.claude/削除済み へ移す)。
 
 使い方:
-    python スキル移行.py           移行する
-    python スキル移行.py --check   調べるだけ(何も変更しない)
+    python スキル移行.py             移行する
+    python スキル移行.py --replace   手作業で置かれたスキルがあれば、退避して置き換える
+    python スキル移行.py --check     調べるだけ(何も変更しない)
 
 移行の後は、プラグインの画面で古い「Voucher to yayoi」を無効にし、ランチャーを
 起動し直すこと(手順は最後に表示する)。
@@ -40,6 +43,7 @@ import sys
 import tempfile
 import urllib.request
 import zipfile
+from datetime import datetime
 from pathlib import Path
 
 PLUGIN_NAME = "voucher-to-yayoi"
@@ -51,6 +55,7 @@ SHORTCUT_NAME = "仕訳.TeamTKS.lnk"
 ZIP_URL = "https://codeload.github.com/teamtks/voucher-to-kaikei-marketplace/zip/refs/heads/main"
 APP_DATA_ROOT = Path(os.environ.get("LOCALAPPDATA", str(HOME / "AppData" / "Local"))) / "Claude-Data"
 VENV_STASH = CLAUDE_DIR / ".venv-keep-migrate"
+BACKUP_ROOT = CLAUDE_DIR / "削除済み"
 
 
 def say(tag: str, message: str) -> None:
@@ -118,12 +123,21 @@ def latest_source(workdir: Path) -> "tuple[Path, str]":
     return found[0], "zip"
 
 
-def install(src: Path, head: str) -> None:
-    """TARGETに最新版を置く。手置きのスキルがあれば止まる。.venvは残す。"""
-    if TARGET.exists() and not (TARGET / MARK).is_file():
+def install(src: Path, head: str, replace_hand_placed: bool = False) -> None:
+    """TARGETに最新版を置く。.venvは残す。
+
+    手作業で置かれたスキル(移行の印が無いもの)があれば、既定では止まる。開発用
+    PCではそれが作業中の本体だからである。職員のPCで置き換えてよい場合だけ
+    replace_hand_placed を指定する。その場合も消さずに「削除済み」へ移して残す
+    (利用者の運用ルール:削除せず「削除済み」フォルダへ移す)。
+    """
+    hand_placed = TARGET.exists() and not (TARGET / MARK).is_file()
+    if hand_placed and not replace_hand_placed:
         raise SystemExit(
             f"  [中止] {TARGET} に、手作業で置かれたスキルがあります。上書きしません。\n"
-            "         (開発用のPCではこの状態が正常です。職員のPCでこう出た場合は担当者に連絡してください)"
+            "         開発用のPCではこの状態が正常です。\n"
+            "         職員のPCで置き換えてよい場合は、--replace を付けて実行し直してください\n"
+            f"         (元のスキルは {BACKUP_ROOT} に移して残します)。"
         )
 
     venv = TARGET / "scripts" / ".venv"
@@ -135,7 +149,13 @@ def install(src: Path, head: str) -> None:
         stashed = True
     try:
         if TARGET.exists():
-            shutil.rmtree(TARGET)
+            if hand_placed:
+                backup = BACKUP_ROOT / f"{PLUGIN_NAME}_{datetime.now():%Y%m%d_%H%M%S}"
+                backup.parent.mkdir(parents=True, exist_ok=True)
+                TARGET.rename(backup)
+                say("退避", f"手作業で置かれていたスキルを移しました(消していません): {backup}")
+            else:
+                shutil.rmtree(TARGET)  # 以前この道具が置いた版(印あり)なので、入れ替えてよい
         shutil.copytree(src, TARGET, ignore=shutil.ignore_patterns(".venv", "__pycache__"))
     finally:
         if stashed:
@@ -203,6 +223,8 @@ def report_app_managed(reference: "str | None") -> "list[Path]":
 def main() -> int:
     parser = argparse.ArgumentParser(description="最新のスキルが確実に読まれる形に移す")
     parser.add_argument("--check", action="store_true", help="調べるだけ(何も変更しない)")
+    parser.add_argument("--replace", action="store_true",
+                        help="手作業で置かれたスキルがあれば、削除済みへ移して置き換える")
     args = parser.parse_args()
 
     print("=" * 68)
@@ -210,16 +232,22 @@ def main() -> int:
     print("=" * 68)
 
     if args.check:
-        state = "移行済み" if (TARGET / MARK).is_file() else ("手置き(開発用)" if TARGET.exists() else "未移行")
+        state = "移行済み" if (TARGET / MARK).is_file() else ("手作業で置かれたもの" if TARGET.exists() else "未移行")
         say("状態", f"{TARGET}: {state}")
-        report_app_managed(digest(TARGET / "SKILL.md") if (TARGET / "SKILL.md").is_file() else None)
+        md = TARGET / "SKILL.md"
+        if md.is_file():
+            # 置き換えてよいかの判断材料。案件の判定(resolve_case)は9月末に入った処理
+            when = datetime.fromtimestamp(md.stat().st_mtime).strftime("%Y-%m-%d")
+            recent = "あり" if "resolve_case" in md.read_text(encoding="utf-8", errors="replace") else "なし(9月末より前の版)"
+            say("版", f"SKILL.mdの更新日 {when} / 案件の判定の処理: {recent}")
+        report_app_managed(digest(md) if md.is_file() else None)
         print()
         print("  ※ 調べただけで、何も変更していません。")
         return 0
 
     with tempfile.TemporaryDirectory() as tmp:
         src, head = latest_source(Path(tmp))
-        install(src, head)
+        install(src, head, replace_hand_placed=args.replace)
     recreate_shortcut()
     old = report_app_managed(digest(TARGET / "SKILL.md"))
 
